@@ -1,0 +1,128 @@
+import { useState } from "react";
+import AppLayout from "../layouts/AppLayout";
+import SummaryCards from "../components/SummaryCards";
+import { roles, roleNav } from "../data/roles";
+import {
+  GraduationCap,
+  Users,
+  UserPlus,
+  FileText,
+  Lightbulb,
+  BarChart3,
+} from "lucide-react";
+
+const summaryCards = [
+  { id: "classes",    label: "Classes",     value: 8,    icon: "GraduationCap", color: "bg-blue-50 text-blue-700",    trend: "1 defaulters class" },
+  { id: "teachers",   label: "Teachers",    value: 9,    icon: "Users",         color: "bg-emerald-50 text-emerald-700", trend: "All reporting" },
+  { id: "students",   label: "Students",    value: 312,  icon: "Users",         color: "bg-violet-50 text-violet-700", trend: "Mid-Year cycle" },
+  { id: "papers",     label: "Papers",      value: 287,  icon: "FileText",      color: "bg-amber-50 text-amber-700",   trend: "12 pending" },
+  { id: "certified",  label: "Certified %", value: "71.4%", icon: "Award",     color: "bg-rose-50 text-rose-700",     trend: "+5% YoY" },
+];
+
+const classOverview = [
+  { id: "2-A", teacher: "Anita Kumari",  students: 38, mastery: "82%", focus: "Number Sense",    nextAction: "On Track" },
+  { id: "2-B", teacher: "Mohan Lal",     students: 41, mastery: "76%", focus: "Patterns",        nextAction: "On Track" },
+  { id: "3-A", teacher: "Priya Sharma",  students: 42, mastery: "84%", focus: "Measurement",     nextAction: "Generate Worksheet" },
+  { id: "3-B", teacher: "Rekha Joshi",   students: 40, mastery: "62%", focus: "Fractions",       nextAction: "Needs Intervention" },
+  { id: "4-A", teacher: "Sangeeta Rao",  students: 39, mastery: "78%", focus: "Money",           nextAction: "On Track" },
+  { id: "4-B", teacher: "Vikas Mehta",   students: 37, mastery: "55%", focus: "Data Handling",   nextAction: "Needs Intervention" },
+  { id: "4-C", teacher: "Deepak Yadav",  students: 35, mastery: "70%", focus: "Calendar & Time", nextAction: "On Track" },
+  { id: "5-A", teacher: "Kavita Singh",  students: 40, mastery: "—",  focus: "Baseline pending",nextAction: "Schedule Baseline" },
+];
+
+const conceptSuggestions = [
+  { topic: "Fractions (3-B)", suggestion: "Add visual fraction bars for 1/2 and 1/4 — current mastery 62%." },
+  { topic: "Data Handling (4-B)", suggestion: "Introduce bar-chart reading exercises; current mastery 55%." },
+  { topic: "Patterns (2-B)", suggestion: "Group activity: pattern continuity with shapes." },
+];
+
+export default function SchoolPrincipalDashboard() {
+  const [activeId, setActiveId] = useState("dashboard");
+
+  return (
+    <AppLayout
+      navItems={roleNav.school}
+      user={roles.school}
+      title="School Dashboard · GPS Model Town 001"
+      subtitle="Institution-level overview · High-strength / internet-connected"
+      activeId={activeId}
+      onSelect={setActiveId}
+    >
+      <SummaryCards cards={summaryCards} />
+
+      <section className="bg-white rounded-xl border border-slate-200">
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <h2 className="font-semibold text-slate-900 inline-flex items-center gap-2">
+            <GraduationCap size={18} className="text-indigo-600" />
+            Class-wise Overview
+          </h2>
+          <div className="flex gap-2">
+            <button className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 text-sm rounded-lg hover:bg-slate-50">
+              <UserPlus size={14} />
+              Add Student
+            </button>
+            <button className="inline-flex items-center gap-2 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">
+              <FileText size={14} />
+              Generate Papers
+            </button>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+              <tr>
+                <th className="text-left px-5 py-3">Class</th>
+                <th className="text-left px-5 py-3">Teacher</th>
+                <th className="text-right px-5 py-3">Students</th>
+                <th className="text-right px-5 py-3">Mastery</th>
+                <th className="text-left px-5 py-3">Focus Area</th>
+                <th className="text-left px-5 py-3">Next Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {classOverview.map((c) => (
+                <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50/50">
+                  <td className="px-5 py-3 font-mono text-xs text-slate-700">{c.id}</td>
+                  <td className="px-5 py-3 font-medium text-slate-900">{c.teacher}</td>
+                  <td className="px-5 py-3 text-right text-slate-700">{c.students}</td>
+                  <td className="px-5 py-3 text-right text-slate-700">{c.mastery}</td>
+                  <td className="px-5 py-3 text-slate-700">{c.focus}</td>
+                  <td className="px-5 py-3">
+                    <span className={[
+                      "inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium",
+                      c.nextAction === "On Track" ? "bg-emerald-100 text-emerald-700"
+                        : c.nextAction === "Needs Intervention" ? "bg-rose-100 text-rose-700"
+                        : c.nextAction === "Generate Worksheet" ? "bg-amber-100 text-amber-700"
+                        : "bg-slate-100 text-slate-700",
+                    ].join(" ")}>{c.nextAction}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="bg-white rounded-xl border border-slate-200 p-5">
+        <h2 className="font-semibold text-slate-900 inline-flex items-center gap-2 mb-3">
+          <Lightbulb size={18} className="text-amber-500" />
+          Concept-Focus Suggestions
+        </h2>
+        <p className="text-xs text-slate-500 mb-4">Auto-generated from the last assessment cycle.</p>
+        <ul className="space-y-3">
+          {conceptSuggestions.map((c) => (
+            <li key={c.topic} className="flex items-start gap-3 p-3 bg-amber-50/60 border border-amber-200 rounded-lg">
+              <div className="w-7 h-7 rounded-lg bg-amber-100 grid place-items-center text-amber-700 shrink-0">
+                <Lightbulb size={14} />
+              </div>
+              <div>
+                <div className="text-sm font-medium text-slate-900">{c.topic}</div>
+                <div className="text-sm text-slate-700">{c.suggestion}</div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </AppLayout>
+  );
+}
