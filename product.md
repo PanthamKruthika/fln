@@ -131,6 +131,17 @@ src/
 - 3 files changed, 229 insertions.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 12 — Switch login role selector to horizontal tabs
+- Replaced the 2-column role **boxes** with a single horizontal **tab strip** styled like the usual login / sign-up / reset-password tab row.
+- Each tab uses `border-b-2` for the underline indicator; active tab = `border-indigo-600 text-indigo-700`, inactive = `border-transparent text-slate-500 hover:border-slate-300`.
+- Added `overflow-x-auto` so all 7 role tabs remain reachable on narrow viewports.
+- Commit:
+  ```
+  style: switch login role selector from boxes to horizontal tabs
+  ```
+- 1 file changed, 8 insertions, 20 deletions.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ---
 
 ## Open follow-ups (not yet implemented)
