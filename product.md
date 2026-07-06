@@ -337,6 +337,23 @@ src/
 - 17 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 23 — Add "Download Question Paper" button (4 places)
+- Teachers need to print question papers before the exam (SRS §6.4 — 1-hour print window).
+- Added a prominent **Download Question Paper** button in:
+  - **`/teacher/assessments`** — primary action on every assessment row (blue button + icon).
+  - **`/teacher/worksheets`** — clearer "Download" label on each history row.
+  - **`/teacher/classes/:classId` → Question Papers tab** — real worksheet history per class with per-row Download.
+  - **`/teacher/classes/:classId` → Assessments tab** — per-assessment Download Question Paper button.
+- Renamed the ClassDetail "Worksheets" tab to **"Question Papers"** to match the user's mental model and SRS terminology.
+- Replaced empty `SimpleTab` placeholders with real data tables.
+- Handler is currently `console.log + alert` — ready to wire to `POST /api/assessments/:id/paper.pdf` once the backend route exists.
+- Commit:
+  ```
+  feat(teacher): add Download Question Paper button in 4 places
+  ```
+- 3 files changed, +145/-27.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ### Sample credentials (password: `Welcome1!`)
 | Role | Email |
 |---|---|
