@@ -281,6 +281,17 @@ src/
 - 3 files changed, +292/-1.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 20 — Clean up "Reach at a glance" stat cards
+- The first Home-page version used a double-nested `<div>` with conflicting `bg-gradient-*` + inline `style.backgroundImage` that produced messy rendering.
+- Rewrote to match the existing `SummaryCards` pattern: white card with thin border, small colored icon chip (light bg + matching dark fg), large number, plain label. No gradients, no nested wrappers.
+- Same data, much cleaner output.
+- Commit:
+  ```
+  style(home): clean up 'Reach at a glance' stat cards
+  ```
+- 1 file changed, +18/-12.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ### Sample credentials (password: `Welcome1!`)
 | Role | Email |
 |---|---|
