@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Search, Filter, FileText, Plus, Eye } from "lucide-react";
+import { Search, Filter, Plus, Eye } from "lucide-react";
 
 const statusStyles = {
   Submitted:     "bg-emerald-100 text-emerald-700",
@@ -64,14 +64,9 @@ export default function ClassRoster({ students, onAddStudent }) {
             </select>
           </div>
 
-          <button className="inline-flex items-center gap-2 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">
-            <FileText size={14} />
-            Generate Worksheets
-          </button>
-
           <button
             onClick={onAddStudent}
-            className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 text-sm rounded-lg hover:bg-slate-50"
+            className="inline-flex items-center gap-2 px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700"
           >
             <Plus size={14} />
             Add Student
