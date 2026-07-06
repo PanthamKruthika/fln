@@ -198,11 +198,36 @@ src/
 - 4 files changed, 58 insertions, 5 deletions.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 15 — Build dashboards for all 7 roles
+- Extracted shared scaffolding so dashboards don't duplicate chrome:
+  - `src/layouts/AppLayout.jsx` — Sidebar + Header + scrollable main slot.
+  - `src/data/roles.js` — per-role profile (label/title/email) + `roleNav` maps for all 7 sidebar lists.
+- Refactored `TeacherDashboard` to use `AppLayout` (no behavior change).
+- Built 6 new dashboards, each wired to its SRS §4 / §14.3 responsibilities:
+  | Route | Role | Highlights |
+  |---|---|---|
+  | `/superadmin` | Superadmin | State-wise table, announcement composer (urgent-toggle triggers email), ticket review queue with Approve/Reject |
+  | `/admin` | Admin (State) | District ranking by FLN cert %, learning-gap mastery bars per topic, lagging-district flags |
+  | `/district` | District Admin | 4-stage pipeline (Conducted → Scanned → Evaluated → Certified) with bottleneck indicators, Block Admin tracking |
+  | `/block` | Block Admin | Volunteer tracking, low-strength schools table with paired-lock Generate Papers CTA |
+  | `/school` | School Principal | Class-wise mastery overview (8 classes), concept-focus suggestions, Add Student + Generate Papers |
+  | `/volunteer` | Volunteer | Assigned low-strength schools, scan logbook with batch Upload/Re-process actions |
+- Updated `src/App.jsx` with all 7 dashboard routes alongside `/login`.
+- **Verified:** all 7 routes return HTTP 200; no console errors beyond React Router v7 future-flag warnings.
+- Commit:
+  ```
+  feat(ui): build dashboards for the remaining 6 roles
+  ```
+- 9 files changed, ~1100 insertions.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ---
 
 ## Open follow-ups (not yet implemented)
 
 - [ ] Wire frontend `LoginPage` to real `POST /api/auth/login` (replace mock validation).
+- [ ] Remove the role selector on login (SRS §3.2 A-1 forbids it).
+- [ ] Add email-domain validation `@fln.org` (SRS §3.2 A-2).
 - [ ] Per-student detail drawer (level history + last report).
 - [ ] Schools / Students / Worksheets / AnswerSubmissions / EvaluationReports / Tickets models.
 - [ ] Generation-Lock Service + Delayed-Attempt/Defaulter Engine on backend (§13.2 R-11, R-12).
