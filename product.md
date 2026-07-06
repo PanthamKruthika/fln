@@ -221,11 +221,36 @@ src/
 - 9 files changed, ~1100 insertions.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 16 — End-to-end login for all 7 roles
+- **Backend** — `src/scripts/seedRoles.js` + `npm run seed:roles` provisions sample accounts for every role; idempotent (5 created, 2 already existed from earlier testing).
+- **Frontend** — `src/contexts/AuthContext.jsx` exposes `useAuth`, `useLogout`, `routeForRole`; persists `{token, user}` in `localStorage` under `fln.auth`.
+- `LoginPage` now calls real `POST /api/auth/login` (fetch), stores the JWT via the context, then navigates to the dashboard that matches the **server-resolved role** (auth source of truth is the backend).
+- `AppLayout` now reads user from `useAuth()` and derives avatar initials from `user.name`. Static `roles.X` mocks removed from dashboard pages.
+- `Sidebar` logout button calls `useLogout()` → clears auth and routes to `/`.
+- New `RequireAuth` guard wraps every dashboard route — unauthenticated visitors bounce to login.
+- **Verified:** login for each of the 7 roles returns `200` with the correct `user.role`; protected `GET /api/me` works with the issued JWT.
+- Commit:
+  ```
+  feat(auth): wire frontend login to backend with JWT + role routing
+  ```
+- 8 files changed, +221/-42.
+- Pushed to `scanning_verifying_answerpaper`.
+
+### Sample credentials (password: `Welcome1!`)
+| Role | Email |
+|---|---|
+| Superadmin | `superadmin@fln.org` |
+| Admin (State) | `admin.pb@fln.org` |
+| District Admin | `district.ldh@fln.org` |
+| Block Admin | `block.ldh-01@fln.org` |
+| School Principal | `gps-mt-001@fln.org` |
+| Teacher | `gps-mt-001.t01@fln.org` |
+| Volunteer | `vol.rahul@fln.org` |
+
 ---
 
 ## Open follow-ups (not yet implemented)
 
-- [ ] Wire frontend `LoginPage` to real `POST /api/auth/login` (replace mock validation).
 - [ ] Remove the role selector on login (SRS §3.2 A-1 forbids it).
 - [ ] Add email-domain validation `@fln.org` (SRS §3.2 A-2).
 - [ ] Per-student detail drawer (level history + last report).
