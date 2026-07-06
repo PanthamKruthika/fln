@@ -104,12 +104,55 @@ export const worksheets = [
   { id: "WS-0045", student: "Vivaan Gupta", classId: "C2A", generatedAt: "2026-07-04", level: "L5", status: "Completed",  difficulty: "Easy" },
 ];
 
-export const assessments = [
-  { id: "AS-2026-MY", name: "Mid-Year Assessment 2026", className: "Class 2A", date: "2026-09-10", status: "Scheduled",   expected: 32, completed: 0 },
-  { id: "AS-2026-BL", name: "Baseline 2026",            className: "Class 2A", date: "2026-04-15", status: "Completed",   expected: 32, completed: 32 },
-  { id: "AS-2025-EY", name: "End-Year 2025",            className: "Class 2A", date: "2026-03-22", status: "Completed",   expected: 32, completed: 30 },
-  { id: "AS-2025-MY", name: "Mid-Year 2025",            className: "Class 2A", date: "2025-09-08", status: "Completed",   expected: 32, completed: 32 },
-];
+export const assessments = (() => {
+  const HOUR = 60 * 60 * 1000;
+  const DAY = 24 * HOUR;
+  const now = Date.now();
+
+  return [
+    {
+      id: "AS-DEMO-PRINT",
+      name: "Demo · Print Window Open",
+      className: "Class 2A",
+      date: new Date(now + 12 * HOUR).toISOString(),
+      expected: 32,
+      completed: 0,
+    },
+    {
+      id: "AS-DEMO-EXAM",
+      name: "Demo · Exam In Progress",
+      className: "Class 3A",
+      date: new Date(now + 15 * 60 * 1000).toISOString(),
+      expected: 36,
+      completed: 0,
+    },
+    {
+      id: "AS-DEMO-SUB",
+      name: "Demo · Submission Window",
+      className: "Class 2B",
+      date: new Date(now - 60 * 60 * 1000).toISOString(),
+      expected: 30,
+      completed: 0,
+    },
+    {
+      id: "AS-2026-MY",
+      name: "Mid-Year Assessment 2026",
+      className: "Class 2A",
+      date: new Date(now + 65 * DAY).toISOString(),
+      expected: 32,
+      completed: 0,
+      announced: true,
+    },
+    {
+      id: "AS-2026-BL",
+      name: "Baseline 2026",
+      className: "Class 2A",
+      date: new Date(now - 90 * DAY).toISOString(),
+      expected: 32,
+      completed: 32,
+    },
+  ];
+})();
 
 export const navItems = [
   { id: "home",          label: "Dashboard",            icon: "Home",       path: "/teacher" },

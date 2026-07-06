@@ -1,9 +1,18 @@
 import { useEffect, useState } from "react";
 import { useParams, useOutletContext, Link } from "react-router-dom";
-import { Users, GraduationCap, ClipboardList, FileText, ArrowLeft, Download, Eye } from "lucide-react";
+import { Users, GraduationCap, ClipboardList, FileText, ArrowLeft, Download, Eye, Lock } from "lucide-react";
 import { classes, students, worksheets, assessments, studentDetail } from "../../data/teacherData";
+import { getExamPhase, formatExamDate } from "../../utils/examPhase";
 
 const tabs = ["Students", "Question Papers", "Assessments", "Reports", "Analytics"];
+
+const phaseStyles = {
+  too_early:         { badge: "bg-slate-100 text-slate-600" },
+  print_window:      { badge: "bg-blue-100 text-blue-800" },
+  exam_window:       { badge: "bg-amber-100 text-amber-800" },
+  submission_window: { badge: "bg-emerald-100 text-emerald-800" },
+  closed:            { badge: "bg-slate-100 text-slate-500" },
+};
 
 const handleDownload = (label, id) => {
   console.log(`[download-question-paper] ${id}`);
@@ -142,7 +151,7 @@ function QuestionPapersTab({ rows }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-slate-500">{rows.length} question papers generated for this class.</p>
+        <p className="text-sm text-slate-500">{rows.length} practice question papers generated for this class.</p>
         <Link to="/teacher/worksheets" className="text-xs text-blue-600 hover:text-blue-700">Generate new →</Link>
       </div>
       <table className="w-full text-sm">
@@ -205,33 +214,61 @@ function AssessmentsTab({ rows }) {
           <tr>
             <th className="text-left px-4 py-3">Assessment</th>
             <th className="text-left px-4 py-3">Date</th>
-            <th className="text-left px-4 py-3">Status</th>
-            <th className="text-right px-4 py-3">Action</th>
+            <th className="text-left px-4 py-3">Cycle Phase</th>
+            <th className="text-right px-4 py-3">Actions</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((a) => (
-            <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50/50">
-              <td className="px-4 py-3 font-medium text-slate-900">{a.name}</td>
-              <td className="px-4 py-3 text-slate-700">{a.date}</td>
-              <td className="px-4 py-3">
-                <span className={[
-                  "px-2 py-0.5 rounded-md text-xs font-medium",
-                  a.status === "Completed" ? "bg-emerald-50 text-emerald-700"
-                    : a.status === "Scheduled" ? "bg-blue-50 text-blue-700"
-                    : "bg-amber-50 text-amber-700",
-                ].join(" ")}>{a.status}</span>
-              </td>
-              <td className="px-4 py-3 text-right">
-                <button
-                  onClick={() => handleDownload(`${a.name} · ${a.className}`, a.id)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
-                >
-                  <Download size={13} /> Download Question Paper
-                </button>
-              </td>
-            </tr>
-          ))}
+          {rows.map((a) => {
+            const phase = getExamPhase(a.date);
+            const style = phaseStyles[phase.key];
+            return (
+              <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50/50">
+                <td className="px-4 py-3 font-medium text-slate-900">{a.name}</td>
+                <td className="px-4 py-3 text-slate-700">{formatExamDate(a.date)}</td>
+                <td className="px-4 py-3">
+                  <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${style.badge}`}>{phase.label}</span>
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <div className="inline-flex items-center gap-2 justify-end">
+                    {phase.canDownload ? (
+                      <button
+                        onClick={() => handleDownload(`${a.name} · ${a.className}`, a.id)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
+                      >
+                        <Download size={13} /> Download
+                      </button>
+                    ) : (
+                      <button
+                        disabled
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-400 text-xs font-medium cursor-not-allowed"
+                        title={phase.label}
+                      >
+                        <Lock size={12} /> Download
+                      </button>
+                    )}
+
+                    {phase.canUpload ? (
+                      <Link
+                        to={`/teacher/upload?assessment=${a.id}`}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700"
+                      >
+                        Upload Scripts
+                      </Link>
+                    ) : (
+                      <button
+                        disabled
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-400 text-xs font-medium cursor-not-allowed"
+                        title="Opens after exam ends"
+                      >
+                        <Lock size={12} /> Upload Scripts
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
