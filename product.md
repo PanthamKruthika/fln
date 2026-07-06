@@ -309,6 +309,34 @@ src/
 - 1 file added, 536 insertions.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 22 — Complete Teacher Dashboard redesign (Material-UI inspired)
+- New `recharts` dependency for charts.
+- New shared layout `src/layouts/TeacherLayout.jsx` (sidebar + topbar) plus `src/components/teacher/TeacherSidebar.jsx` (collapsible, 10 menu items, school context locked at top) and `TeacherTopbar.jsx` (search, current date, notifications, profile avatar).
+- All data scoped to **one school** (ABC Public School) and **one teacher** (Anjali Sharma) — no district/state visibility, no admin controls.
+- 11 pages built under `src/pages/teacher/`:
+  | Page | Highlights |
+  |---|---|
+  | `TeacherHome` | Welcome banner · 8 summary cards · 4 class cards with CTAs |
+  | `MyClasses` | Class cards with stats, progress, Open Class |
+  | `ClassDetail` | Info card + Students / Worksheets / Assessments / Reports / Analytics tabs |
+  | `Students` | Searchable + filterable + paginated table (id, photo, level, score, progress, status) |
+  | `StudentProfile` | Photo, tags, current/target, 8 competency progress bars, AI insights (strengths/weaknesses/recommendations), assessment + worksheet history tables |
+  | `PracticeWorksheets` | Generator card + history table with Preview / Download / Regenerate |
+  | `Assessments` | Create / Schedule CTAs + table (status, expected vs completed, View / Upload / Results) |
+  | `UploadScripts` | Assessment picker · drag-and-drop PDF · animated 5-stage processing timeline · results table with confidence + Review / Reprocess |
+  | `Analytics` | Recharts: bar + pie + line charts (Avg Score by Class, FLN Distribution, Concept Mastery, Weekly Worksheets, Monthly Progress) |
+  | `Reports` | 5 report types with PDF + Excel export |
+  | `Settings` | Profile / Password / Notifications / Theme / Language |
+- `src/App.jsx`: `/teacher` now hosts a nested layout with 10 child routes; other role dashboards unchanged.
+- **Theme:** white bg, blue `#2563EB` primary, 12px radius, soft shadows, accessible focus states.
+- **Verified:** all 11 teacher routes return HTTP 200; only the harmless React Router v7 future-flag warnings.
+- Commit:
+  ```
+  feat(teacher): complete Material-style Teacher Dashboard redesign
+  ```
+- 17 files added, 1 changed.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ### Sample credentials (password: `Welcome1!`)
 | Role | Email |
 |---|---|
