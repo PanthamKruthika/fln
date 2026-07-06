@@ -181,6 +181,23 @@ src/
 - 11 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 14 — Remove public registration (per SRS §1.3 / R-1)
+- Verified the frontend `LoginPage` has **no register / sign-up** link or route (only horizontal role tabs + Sign In).
+- Locked `POST /api/auth/register` behind `requireAuth + requireRole('superadmin', 'admin')` — public calls now return `401 missing bearer token`.
+- Added `src/scripts/seedSuperadmin.js` + `npm run seed:superadmin` so the **first** Superadmin can be bootstrapped without a public endpoint (idempotent — skips if the email already exists).
+- Updated `backend-node/README.md` to replace the curl register example with the seed-script docs.
+- **Verified:**
+  - Public `POST /api/auth/register` → `401`
+  - `POST /api/auth/register` with Superadmin JWT → `201` (Teacher provisioned)
+  - Login as that Teacher → `200`
+  - `npm run seed:superadmin` first run → creates; second run → reports `"user already exists"`
+- Commit:
+  ```
+  fix(backend): remove public registration, lock to admin roles
+  ```
+- 4 files changed, 58 insertions, 5 deletions.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ---
 
 ## Open follow-ups (not yet implemented)
