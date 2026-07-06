@@ -236,6 +236,20 @@ src/
 - 8 files changed, +221/-42.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 17 — Visible Logout button on every dashboard
+- The Sidebar had a tiny LogOut icon that was easy to miss.
+- `src/components/Header.jsx` now reads `user` from `useAuth()` and renders:
+  - the user's **name + email** in the top-right header,
+  - a prominent **rose-tinted "Logout" pill** (icon + label) next to the bell icon.
+- Both the new header Logout button and the existing Sidebar icon call the same `useLogout()` from `AuthContext`, which clears `localStorage.fln.auth` and routes to `/`.
+- The `RequireAuth` guard ensures visiting a dashboard URL while logged out bounces back to the login page automatically.
+- Commit:
+  ```
+  feat(ui): add visible Logout button in dashboard Header
+  ```
+- 1 file changed, +29/-2.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ### Sample credentials (password: `Welcome1!`)
 | Role | Email |
 |---|---|
