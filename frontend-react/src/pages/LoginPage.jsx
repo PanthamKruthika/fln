@@ -64,11 +64,8 @@ export default function LoginPage() {
             </p>
           </div>
 
-          <div className="mb-5">
-            <label className="block text-xs font-medium text-slate-600 mb-2 uppercase tracking-wide">
-              Select your role
-            </label>
-            <div className="grid grid-cols-2 gap-2">
+          <div className="mb-5 border-b border-slate-200">
+            <nav className="-mb-px flex overflow-x-auto" aria-label="Role tabs">
               {loginRoles.map((r) => {
                 const active = r.id === selectedRole;
                 return (
@@ -77,27 +74,18 @@ export default function LoginPage() {
                     type="button"
                     onClick={() => setSelectedRole(r.id)}
                     className={[
-                      "text-left px-3 py-2.5 rounded-lg border transition",
+                      "shrink-0 px-4 py-2.5 text-sm font-medium border-b-2 transition whitespace-nowrap",
                       active
-                        ? "border-indigo-600 bg-indigo-50 ring-1 ring-indigo-600"
-                        : "border-slate-200 hover:border-slate-300 bg-white",
+                        ? "border-indigo-600 text-indigo-700"
+                        : "border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300",
                     ].join(" ")}
+                    aria-current={active ? "page" : undefined}
                   >
-                    <div
-                      className={[
-                        "text-sm font-medium",
-                        active ? "text-indigo-700" : "text-slate-800",
-                      ].join(" ")}
-                    >
-                      {r.label}
-                    </div>
-                    <div className="text-[11px] text-slate-500">
-                      {r.description}
-                    </div>
+                    {r.label}
                   </button>
                 );
               })}
-            </div>
+            </nav>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
