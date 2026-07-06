@@ -263,6 +263,24 @@ src/
 - 3 files changed, +11/-13.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 19 — Public Home / Landing page (SRS §2)
+- **Backend:** `GET /api/public/stats` (no auth) returns `states`, `districts`, `blocks`, `schools`, `students`, `assessmentsConducted`, `flnCertificationPct`, `lastUpdated`.
+- **Frontend:** `src/pages/HomePage.jsx` — public landing page:
+  - Top bar with FLN logo + nav (Mission · Reach · Why FLN · Contact) + **Login CTA** in the upper-right.
+  - Hero (indigo→violet→fuchsia gradient) with the title *"Foundational Literacy & Numeracy — Assessment for Every Child, at Their Level"* and primary "Sign In to Dashboard" button.
+  - **6 statistical cards** (States · Districts · Schools · Students · Assessments · FLN Score) — fetched live from `/api/public/stats`, with a graceful fallback to the mock dataset if the backend is unreachable.
+  - **Vision & Mission** split section.
+  - **Why FLN matters** knowledge cards (ASER 2023 reading levels, NAS 2021 numeracy, NEP 2020 foundational priority).
+  - Dark footer with About / Contact / Legal columns.
+- `src/App.jsx`: `/` now resolves to `<HomePage />`; `/login` keeps the existing LoginPage. All 7 dashboards remain wrapped in `RequireAuth`.
+- **Verified:** all 9 routes return HTTP 200; only the harmless React Router v7 future-flag warnings remain.
+- Commit:
+  ```
+  feat: add public Home page (SRS §2) with live stats + Login CTA
+  ```
+- 3 files changed, +292/-1.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ### Sample credentials (password: `Welcome1!`)
 | Role | Email |
 |---|---|
