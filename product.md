@@ -337,6 +337,18 @@ src/
 - 17 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 26 — Extend submission window to 24 hours
+- Per project policy, the submission window is now **24 hours** after the exam ends (vs SRS §6.4's 1-hour default).
+- `src/utils/examPhase.js` — `submission_window` condition widened from `-1h 45min` to `-24h`; remaining-time label now shows hours+minutes (e.g. *"Submission window · 18h 24m remaining"*).
+- `src/pages/teacher/Assessments.jsx` — header copy + timing-rules legend updated.
+- `src/pages/teacher/UploadScripts.jsx` — locked-guard copy updated.
+- Commit:
+  ```
+  fix(teacher): extend submission window from 1 hour to 24 hours
+  ```
+- 3 files changed, +13/-10.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ## Step 25 — Redesign My Classes page (cleaner, premium look)
 - Rewrote `src/pages/teacher/MyClasses.jsx` with a more breathable, Notion/Linear-style layout.
 - **Page summary strip** above the grid: `"4 classes · 132 students"` + class-average score (tone-colored) + secondary actions (View as list, All Students).
