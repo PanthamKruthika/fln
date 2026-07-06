@@ -337,6 +337,16 @@ src/
 - 17 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 27 — Revert My Classes page to the previous version
+- Per user request, the redesigned My Classes page (Step 25) is rolled back to the original Step 22 layout.
+- `frontend-react/src/pages/teacher/MyClasses.jsx` reverted to commit `7fcc1ea` — straight 2-col grid of class cards with the original boxed stat tiles (Students / Avg Score / Assessments / Worksheets), mastery bar, and a single "Open Class →" button.
+- Commit:
+  ```
+  revert(teacher): revert My Classes page to the previous version
+  ```
+- 1 file changed, +56/-149.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ## Step 26 — Extend submission window to 24 hours
 - Per project policy, the submission window is now **24 hours** after the exam ends (vs SRS §6.4's 1-hour default).
 - `src/utils/examPhase.js` — `submission_window` condition widened from `-1h 45min` to `-24h`; remaining-time label now shows hours+minutes (e.g. *"Submission window · 18h 24m remaining"*).
