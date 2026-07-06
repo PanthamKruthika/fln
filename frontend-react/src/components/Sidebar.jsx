@@ -10,6 +10,7 @@ import {
   LogOut,
   Bell,
 } from "lucide-react";
+import { useLogout } from "../contexts/AuthContext";
 
 const iconMap = {
   LayoutDashboard,
@@ -25,6 +26,8 @@ const iconMap = {
 };
 
 export default function Sidebar({ items, activeId, onSelect, user }) {
+  const logout = useLogout();
+
   return (
     <aside className="w-64 shrink-0 bg-white border-r border-slate-200 flex flex-col">
       <div className="px-6 py-5 border-b border-slate-200">
@@ -34,7 +37,7 @@ export default function Sidebar({ items, activeId, onSelect, user }) {
           </div>
           <div>
             <div className="font-semibold text-slate-900 leading-tight">FLN Platform</div>
-            <div className="text-xs text-slate-500">Teacher Console</div>
+            <div className="text-xs text-slate-500">Role Console</div>
           </div>
         </div>
       </div>
@@ -71,7 +74,10 @@ export default function Sidebar({ items, activeId, onSelect, user }) {
             <div className="text-xs text-slate-500 truncate">{user?.email}</div>
           </div>
           <button
+            type="button"
+            onClick={logout}
             title="Logout"
+            aria-label="Logout"
             className="p-2 rounded-md text-slate-500 hover:text-rose-600 hover:bg-rose-50"
           >
             <LogOut size={16} />
