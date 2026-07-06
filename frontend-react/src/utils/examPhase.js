@@ -55,12 +55,15 @@ export function getExamPhase(examDate, now = new Date()) {
     };
   }
 
-  // +45 min → +1h 45 min (submission window)
-  if (diffMs > -1 * HOUR - 45 * 60 * 1000) {
-    const remainingM = Math.ceil((1 * HOUR + 45 * 60 * 1000 + diffMs) / (60 * 1000));
+  // +45 min → +24 hours (submission window)
+  // Project policy: teachers can upload answer scripts for up to 1
+  // day after the exam ends (longer than SRS §6.4's 1-hour default).
+  if (diffMs > -24 * HOUR) {
+    const remainingH = Math.floor((24 * HOUR + diffMs) / HOUR);
+    const remainingM = Math.ceil(((24 * HOUR + diffMs) % HOUR) / (60 * 1000));
     return {
       key: "submission_window",
-      label: `Submission window · ${remainingM} min remaining`,
+      label: `Submission window · ${remainingH}h ${remainingM}m remaining`,
       badge: "bg-emerald-100 text-emerald-800",
       canDownload: false,
       canUpload: true,

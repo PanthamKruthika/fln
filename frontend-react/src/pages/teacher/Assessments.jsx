@@ -26,9 +26,9 @@ export default function Assessments() {
           <h3 className="font-semibold text-slate-900">Announced Assessments</h3>
           <p className="text-sm text-slate-500 mt-1">
             Assessment cycles are scheduled by Superadmin / Admin. As a teacher you can only
-            <b> download the question paper</b> during the 1-hour print window (opens 1 day before
-            the exam) and <b>upload answer scripts</b> during the 1-hour submission window (after
-            the exam ends).
+            <b> download the question paper</b> during the print window (opens 1 day before
+            the exam) and <b>upload answer scripts</b> during the submission window (up to 24 hours
+            after the exam ends).
           </p>
         </div>
       </section>
@@ -137,13 +137,13 @@ export default function Assessments() {
       <section className="bg-white rounded-xl border border-slate-200 p-5">
         <h4 className="font-semibold text-slate-900 mb-3 inline-flex items-center gap-2">
           <AlertTriangle size={16} className="text-amber-500" />
-          Timing rules (per SRS §6.4)
+          Timing rules
         </h4>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-slate-600">
           <div><span className="font-semibold text-slate-700">&gt; 1 day before:</span> locked.</div>
           <div><span className="font-semibold text-slate-700">Print window:</span> 1 day before → exam start · download enabled.</div>
           <div><span className="font-semibold text-slate-700">Exam window:</span> exam start + 45 min · both locked.</div>
-          <div><span className="font-semibold text-slate-700">Submission window:</span> exam end + 1 hour · upload enabled.</div>
+          <div><span className="font-semibold text-slate-700">Submission window:</span> exam end + 24 hours · upload enabled.</div>
         </div>
       </section>
     </div>

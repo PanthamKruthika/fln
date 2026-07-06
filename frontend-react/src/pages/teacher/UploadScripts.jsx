@@ -140,7 +140,7 @@ export default function UploadScripts() {
             <h3 className="font-semibold text-amber-900">Upload locked</h3>
             <p className="text-sm text-amber-800 mt-1">
               Answer scripts can only be uploaded <b>after the exam has ended</b>, during the
-              1-hour submission window (SRS §6.4). For this assessment the window is{" "}
+              24-hour submission window. For this assessment the window is{" "}
               <b>{examPhase.label.toLowerCase()}</b>.
             </p>
             <Link to="/teacher/assessments" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-amber-900 hover:underline">
