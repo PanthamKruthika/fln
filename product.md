@@ -142,15 +142,54 @@ src/
 - 1 file changed, 8 insertions, 20 deletions.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 13 — Scaffold the backend (Node + Express + MongoDB)
+- Started local `mongod` daemon (8.3.2) on `127.0.0.1:27017` with dbpath `~/fln-mongo-data`, logfile `/tmp/mongod.log`.
+- Initialized `backend-node/` with `npm init -y`, set `type: module`, scripts: `start`, `dev` (node --watch).
+- Installed: `express`, `mongoose`, `dotenv`, `cors`, `morgan`, `bcryptjs`, `jsonwebtoken`. Dev: `nodemon` (legacy).
+- Folder layout:
+  ```
+  backend-node/
+  ├── src/
+  │   ├── config/db.js            — mongoose connection + listeners
+  │   ├── models/User.js          — User schema for all 7 roles + scope + defaulter fields
+  │   ├── controllers/authController.js — login + register
+  │   ├── routes/authRoutes.js    — /api/auth/login, /api/auth/register
+  │   ├── routes/systemRoutes.js  — /api/health, /api/me
+  │   ├── middleware/auth.js      — requireAuth (JWT) + requireRole(...)
+  │   └── server.js               — entry point (cors, json, morgan, error handler)
+  ├── .env / .env.example         — PORT, MONGO_URI, JWT_SECRET, JWT_EXPIRES_IN, CORS_ORIGIN
+  ├── .gitignore
+  └── README.md                   — Compass connection + curl examples
+  ```
+- **MongoDB Compass connection:** `mongodb://127.0.0.1:27017/fln` (database name: `fln`).
+- **REST endpoints now live:**
+  - `GET  /` — info
+  - `GET  /api/health` — `{"ok":true}`
+  - `POST /api/auth/register` — provisioning (Superadmin / Admin)
+  - `POST /api/auth/login` — returns JWT (7-day expiry)
+  - `GET  /api/me` — JWT-protected echo of the user payload
+- **Local verification:**
+  - `register` Superadmin → `201`
+  - `login` with correct creds → `200` + JWT
+  - `login` wrong password → `401`
+  - `GET /api/me` without token → `401`
+  - `GET /api/me` with token → `200` (decoded role/email/sub)
+- Commit:
+  ```
+  feat(backend): scaffold Node + Express + MongoDB API
+  ```
+- 11 files added, 1 changed.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ---
 
 ## Open follow-ups (not yet implemented)
 
-- [ ] Backend (`backend-node/`): Express + MongoDB + JWT + role middleware (§3, §13).
-- [ ] Login page (§3) wired to `/api/auth/login` (replace mock validation).
+- [ ] Wire frontend `LoginPage` to real `POST /api/auth/login` (replace mock validation).
 - [ ] Per-student detail drawer (level history + last report).
+- [ ] Schools / Students / Worksheets / AnswerSubmissions / EvaluationReports / Tickets models.
 - [ ] Generation-Lock Service + Delayed-Attempt/Defaulter Engine on backend (§13.2 R-11, R-12).
-- [ ] ICR scan interface (§8) in frontend.
+- [ ] ICR scan interface (§8) in frontend + `/api/evaluation/submit`.
 - [ ] Python automation services (`/automation`) for generation/evaluation.
 - [ ] Curriculum Markdown files under `/curriculum/levels/`.
 - [ ] Pre-built SVG asset library under `/assets/svg/`.
