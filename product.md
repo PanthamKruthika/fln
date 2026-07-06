@@ -337,6 +337,24 @@ src/
 - 17 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 28 — Clean up "My Classes" section on the main Dashboard
+- Rewrote the class cards in `src/pages/teacher/TeacherHome.jsx` to match the cleaner visual language used elsewhere:
+  - Left accent strip (1px gradient) tone-derived from avg score (emerald / blue / amber / rose).
+  - Hover: shadow lift + 0.5px translate + border darkening.
+  - Tight header: `CLASS · SECTION B` eyebrow + class title, tone-colored status pill on the right (On Track / Steady / Watch / Needs Attention).
+  - Inline metric strip (Students · Avg · Level) separated by vertical dividers — no boxed pills.
+  - Gradient mastery bar.
+  - Footer: tiny "Generate" link on the left, dark "Open →" pill on the right.
+- Dropped the four action buttons from each card (View Class / Generate Worksheets / Create Assessment / Upload Scripts) — the class card is a glance card, not a launcher grid.
+- "Create Assessment" entirely removed (project policy — assessments are announced).
+- Welcome banner now shows a "Needs attention" chip on the right that auto-picks the lowest-scoring class.
+- Commit:
+  ```
+  style(teacher): clean up My Classes section on the main dashboard
+  ```
+- 1 file changed, +132/-87.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ## Step 27 — Revert My Classes page to the previous version
 - Per user request, the redesigned My Classes page (Step 25) is rolled back to the original Step 22 layout.
 - `frontend-react/src/pages/teacher/MyClasses.jsx` reverted to commit `7fcc1ea` — straight 2-col grid of class cards with the original boxed stat tiles (Students / Avg Score / Assessments / Worksheets), mastery bar, and a single "Open Class →" button.
