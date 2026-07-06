@@ -25,12 +25,12 @@ const fallbackStats = {
 };
 
 const statCards = (s) => [
-  { id: "states",      label: "States",       value: s.states,                  icon: Building2,      color: "from-blue-500 to-indigo-500" },
-  { id: "districts",   label: "Districts",    value: s.districts.toLocaleString(), icon: Building2,   color: "from-violet-500 to-purple-500" },
-  { id: "schools",     label: "Schools",      value: s.schools.toLocaleString(),   icon: School,      color: "from-emerald-500 to-teal-500" },
-  { id: "students",    label: "Students",     value: s.students.toLocaleString(),  icon: Users,       color: "from-amber-500 to-orange-500" },
-  { id: "assessments", label: "Assessments",  value: s.assessmentsConducted.toLocaleString(), icon: ClipboardCheck, color: "from-rose-500 to-pink-500" },
-  { id: "fln",         label: "FLN Score",    value: `${s.flnCertificationPct}%`, icon: Award,        color: "from-cyan-500 to-sky-500" },
+  { id: "states",      label: "States",       value: s.states,                  icon: Building2,      chip: "bg-blue-50 text-blue-700" },
+  { id: "districts",   label: "Districts",    value: s.districts.toLocaleString(), icon: Building2,   chip: "bg-violet-50 text-violet-700" },
+  { id: "schools",     label: "Schools",      value: s.schools.toLocaleString(),   icon: School,      chip: "bg-emerald-50 text-emerald-700" },
+  { id: "students",    label: "Students",     value: s.students.toLocaleString(),  icon: Users,       chip: "bg-amber-50 text-amber-700" },
+  { id: "assessments", label: "Assessments",  value: s.assessmentsConducted.toLocaleString(), icon: ClipboardCheck, chip: "bg-rose-50 text-rose-700" },
+  { id: "fln",         label: "FLN Score",    value: `${s.flnCertificationPct}%`, icon: Award,        chip: "bg-cyan-50 text-cyan-700" },
 ];
 
 const knowledgeCards = [
@@ -156,13 +156,19 @@ export default function HomePage() {
               return (
                 <div
                   key={c.id}
-                  className="rounded-xl p-4 text-white bg-gradient-to-br shadow-sm"
-                  style={{ backgroundImage: `linear-gradient(135deg, var(--tw-gradient-stops))` }}
+                  className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col gap-3"
                 >
-                  <div className={`rounded-xl p-4 text-white bg-gradient-to-br ${c.color}`}>
-                    <Icon size={20} className="opacity-90" />
-                    <div className="mt-3 text-2xl md:text-3xl font-bold">{fmt(c.value)}</div>
-                    <div className="text-xs uppercase tracking-wide opacity-90">{c.label}</div>
+                  <div
+                    className={[
+                      "w-9 h-9 rounded-lg grid place-items-center",
+                      c.chip,
+                    ].join(" ")}
+                  >
+                    <Icon size={18} />
+                  </div>
+                  <div>
+                    <div className="text-2xl font-semibold text-slate-900">{fmt(c.value)}</div>
+                    <div className="text-sm text-slate-600">{c.label}</div>
                   </div>
                 </div>
               );
