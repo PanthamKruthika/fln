@@ -6,12 +6,11 @@ import {
   ClipboardList,
   FileText,
   BarChart3,
-  AlertTriangle,
   HeartHandshake,
   TrendingUp,
   CheckCircle2,
   ChevronRight,
-  Sparkles,
+  ArrowUpRight,
 } from "lucide-react";
 import { summaryCards, classes } from "../../data/teacherData";
 
@@ -26,17 +25,11 @@ const iconMap = {
   fln: BarChart3,
 };
 
-const levelColor = (score) =>
+const tone = (score) =>
   score >= 80 ? "emerald"
     : score >= 70 ? "blue"
     : score >= 60 ? "amber"
     : "rose";
-
-const statusFor = (score) =>
-  score >= 80 ? { label: "On Track", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200" }
-    : score >= 70 ? { label: "Steady",   chip: "bg-blue-50 text-blue-700 ring-blue-200" }
-    : score >= 60 ? { label: "Watch",    chip: "bg-amber-50 text-amber-700 ring-amber-200" }
-    : { label: "Needs Attention", chip: "bg-rose-50 text-rose-700 ring-rose-200" };
 
 const toneText = {
   emerald: "text-emerald-600",
@@ -44,175 +37,143 @@ const toneText = {
   amber:   "text-amber-600",
   rose:    "text-rose-600",
 };
+
 const toneBg = {
-  emerald: "from-emerald-500 to-teal-500",
-  blue:    "from-blue-500 to-indigo-500",
-  amber:   "from-amber-500 to-orange-500",
-  rose:    "from-rose-500 to-pink-500",
+  emerald: "bg-emerald-500",
+  blue:    "bg-blue-500",
+  amber:   "bg-amber-500",
+  rose:    "bg-rose-500",
 };
 
-export default function TeacherHome() {
-  useEffect(() => {
-    // intentionally empty — page title is already set by Topbar
-  }, []);
+const statusFor = (score) =>
+  score >= 80 ? { label: "On Track", chip: "bg-emerald-50 text-emerald-700" }
+    : score >= 70 ? { label: "Steady",   chip: "bg-blue-50 text-blue-700" }
+    : score >= 60 ? { label: "Watch",    chip: "bg-amber-50 text-amber-700" }
+    : { label: "Needs Attention", chip: "bg-rose-50 text-rose-700" };
 
-  const focusClass = [...classes].sort((a, b) => a.avgScore - b.avgScore)[0];
+export default function TeacherHome() {
+  useEffect(() => {}, []);
 
   return (
-    <div className="space-y-6">
-      {/* Welcome banner */}
-      <div className="relative overflow-hidden bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 rounded-2xl p-6 text-white shadow-sm">
-        <div className="absolute inset-0 opacity-20 [background:radial-gradient(circle_at_top_right,white,transparent_60%)]" />
-        <div className="relative flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="text-xs uppercase tracking-wider text-blue-100 mb-1">
-              {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
-            </div>
-            <h2 className="text-2xl font-semibold">Good morning, Anjali 👋</h2>
-            <p className="text-blue-100 mt-1">
-              Here's what's happening with your classes today.
-            </p>
-          </div>
-          <div className="hidden md:flex items-center gap-2 px-3 py-2 rounded-lg bg-white/15 backdrop-blur text-sm">
-            <Sparkles size={16} />
-            <span>3 new AI insights available</span>
-          </div>
-        </div>
+    <div className="space-y-8">
+      {/* Welcome banner — small, calm */}
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-900">
+          Good morning, Anjali.
+        </h1>
+        <p className="text-sm text-slate-500 mt-1">
+          Here's what's happening across your classes today.
+        </p>
       </div>
 
-      {/* 8 summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {summaryCards.map((c) => {
-          const Icon = iconMap[c.id];
-          return (
-            <div
-              key={c.id}
-              className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col gap-3 hover:shadow-md transition"
-            >
-              <div className="flex items-center justify-between">
-                <div className={`w-10 h-10 rounded-lg grid place-items-center ${c.color}`}>
-                  {Icon ? <Icon size={18} /> : null}
-                </div>
-              </div>
-              <div>
-                <div className="text-2xl font-semibold text-slate-900">{c.value}</div>
-                <div className="text-sm text-slate-600">{c.label}</div>
-              </div>
-              <div className="text-xs text-slate-400">{c.trend}</div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* My Classes */}
+      {/* Summary cards — 4x2 grid, lighter weight */}
       <section>
-        <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {summaryCards.map((c) => {
+            const Icon = iconMap[c.id];
+            return (
+              <div
+                key={c.id}
+                className="bg-white rounded-xl border border-slate-200 p-4 hover:shadow-sm transition"
+              >
+                <div className={`w-9 h-9 rounded-lg grid place-items-center ${c.color}`}>
+                  {Icon ? <Icon size={16} /> : null}
+                </div>
+                <div className="mt-3 text-2xl font-semibold text-slate-900 leading-none">{c.value}</div>
+                <div className="text-sm text-slate-600 mt-1.5">{c.label}</div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* My Classes — clean row list */}
+      <section className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-slate-900">My Classes</h3>
-            <p className="text-sm text-slate-500">Quick view of all classes you teach.</p>
+            <h2 className="font-semibold text-slate-900">My Classes</h2>
+            <p className="text-xs text-slate-500">{classes.length} classes · {classes.reduce((s, c) => s + c.students, 0)} students total</p>
           </div>
-          <div className="flex items-center gap-3">
-            {focusClass && (
-              <span className="hidden md:inline-flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1">
-                <AlertTriangle size={12} />
-                Needs attention: {focusClass.name} · Section {focusClass.section} ({focusClass.avgScore}%)
-              </span>
-            )}
-            <Link
-              to="/teacher/classes"
-              className="text-sm text-blue-600 hover:text-blue-700 inline-flex items-center gap-1 font-medium"
-            >
-              View all <ChevronRight size={14} />
-            </Link>
-          </div>
+          <Link
+            to="/teacher/classes"
+            className="text-sm text-blue-600 hover:text-blue-700 inline-flex items-center gap-1 font-medium"
+          >
+            View all <ChevronRight size={14} />
+          </Link>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {classes.map((c) => <ClassCard key={c.id} cls={c} />)}
+        {/* Column header (hidden on small screens) */}
+        <div className="hidden md:grid grid-cols-[1.6fr_0.7fr_0.7fr_0.7fr_0.9fr_0.4fr] gap-4 px-6 py-3 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-100 bg-slate-50/50">
+          <div>Class</div>
+          <div className="text-center">Students</div>
+          <div className="text-center">Avg Score</div>
+          <div className="text-center">FLN Level</div>
+          <div>Status</div>
+          <div className="text-right">Open</div>
         </div>
+
+        <ul className="divide-y divide-slate-100">
+          {classes.map((c) => <ClassRow key={c.id} cls={c} />)}
+        </ul>
       </section>
     </div>
   );
 }
 
-function ClassCard({ cls }) {
-  const tone = levelColor(cls.avgScore);
+function ClassRow({ cls }) {
+  const t = tone(cls.avgScore);
   const status = statusFor(cls.avgScore);
-  const masteryPct = (parseFloat(cls.avgLevel.slice(1)) / 5) * 100;
 
   return (
-    <article className="group relative bg-white rounded-xl border border-slate-200 hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 overflow-hidden">
-      <div className={`absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b ${toneBg[tone]}`} />
-
-      <div className="p-5 pl-6">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-2 mb-3">
-          <div className="min-w-0">
-            <div className="text-[11px] uppercase tracking-wider text-slate-500">Class · Section {cls.section}</div>
-            <h4 className="text-lg font-semibold text-slate-900 mt-0.5 leading-tight truncate">
+    <li className="px-6 py-3.5 hover:bg-slate-50/60 transition">
+      <Link
+        to={`/teacher/classes/${cls.id}`}
+        className="grid grid-cols-[1fr_auto] md:grid-cols-[1.6fr_0.7fr_0.7fr_0.7fr_0.9fr_0.4fr] gap-4 items-center"
+      >
+        {/* Class */}
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={`w-1.5 h-1.5 rounded-full ${toneBg[t]}`} />
+            <span className="text-sm font-medium text-slate-900 truncate">
               {cls.name}
-            </h4>
+            </span>
+            <span className="text-xs text-slate-400">· Section {cls.section}</span>
           </div>
-          <span className={`shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ring-1 ${status.chip}`}>
-            <span className="w-1.5 h-1.5 rounded-full bg-current" />
+          <div className="text-[11px] text-slate-500 mt-0.5 md:hidden">
+            {cls.students} students · {cls.avgScore}% · {cls.avgLevel}
+          </div>
+        </div>
+
+        {/* Students */}
+        <div className="hidden md:flex justify-center items-center text-sm text-slate-700">
+          <Users size={13} className="text-slate-400 mr-1.5" />
+          {cls.students}
+        </div>
+
+        {/* Avg Score */}
+        <div className={`hidden md:block text-center text-sm font-semibold ${toneText[t]}`}>
+          {cls.avgScore}%
+        </div>
+
+        {/* Level */}
+        <div className={`hidden md:block text-center text-sm font-medium ${toneText[t]}`}>
+          {cls.avgLevel}
+        </div>
+
+        {/* Status */}
+        <div className="hidden md:block">
+          <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium ${status.chip}`}>
             {status.label}
           </span>
         </div>
 
-        {/* Metric row */}
-        <div className="flex items-center gap-4 text-sm">
-          <Metric icon={Users}  label="Students" value={cls.students} />
-          <span className="w-px h-7 bg-slate-100" />
-          <Metric label="Avg"      value={`${cls.avgScore}%`} tone={tone} />
-          <span className="w-px h-7 bg-slate-100" />
-          <Metric label="Level"    value={cls.avgLevel} tone={tone} />
+        {/* Open */}
+        <div className="text-right">
+          <span className="inline-flex items-center justify-center w-7 h-7 rounded-md text-slate-400 group-hover:bg-slate-900 group-hover:text-white transition">
+            <ArrowUpRight size={14} />
+          </span>
         </div>
-
-        {/* Mastery */}
-        <div className="mt-4">
-          <div className="flex items-center justify-between text-[11px] mb-1">
-            <span className="text-slate-500">Mastery</span>
-            <span className="font-semibold text-slate-700">{Math.round(masteryPct)}%</span>
-          </div>
-          <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden">
-            <div
-              className={`h-full rounded-full bg-gradient-to-r ${toneBg[tone]} transition-all duration-500`}
-              style={{ width: `${masteryPct}%` }}
-            />
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="mt-4 flex items-center justify-between">
-          <Link
-            to="/teacher/worksheets"
-            className="text-[11px] text-slate-500 hover:text-blue-600 inline-flex items-center gap-1"
-          >
-            <FileText size={11} /> Generate
-          </Link>
-          <Link
-            to={`/teacher/classes/${cls.id}`}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-900 text-white text-xs font-medium hover:bg-blue-600 transition-colors"
-          >
-            Open
-            <ChevronRight size={12} />
-          </Link>
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function Metric({ icon: Icon, label, value, tone }) {
-  return (
-    <div className="flex-1">
-      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-500">
-        {Icon ? <Icon size={10} /> : null}
-        {label}
-      </div>
-      <div className={`mt-0.5 text-base font-semibold ${tone ? toneText[tone] : "text-slate-900"}`}>
-        {value}
-      </div>
-    </div>
+      </Link>
+    </li>
   );
 }
