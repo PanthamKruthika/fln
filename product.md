@@ -337,6 +337,28 @@ src/
 - 17 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 29 — Replace My Classes card grid with a clean row list
+- The dashboard "My Classes" section was 4 small cards with status pills, mastery bars, and 4 buttons each — too busy.
+- Replaced with a **single clean row list** (Google-Classroom / Notion-style) inside one rounded card:
+  ```
+  CLASS              STUDENTS  AVG SCORE  LEVEL   STATUS      →
+  Class 2 · A          32       82%      L3.2    On Track
+  Class 2 · B          30       76%      L2.9    Steady
+  …
+  ```
+- Each row: colored tone-dot · class name · section · values · status pill · hover-revealed arrow link.
+- Tone colors auto-derived from the class's avg score (emerald / blue / amber / rose).
+- Hover: row tints + the arrow icon turns dark-slate.
+- Mobile fallback row line shows everything in one place.
+- Welcome banner simplified to one heading + one sentence.
+- Summary cards trimmed (smaller icon, no trend line) so the My Classes list becomes the focal point.
+- Commit:
+  ```
+  style(teacher): replace My Classes card grid with a clean row list
+  ```
+- 1 file changed, +106/-145.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ## Step 28 — Clean up "My Classes" section on the main Dashboard
 - Rewrote the class cards in `src/pages/teacher/TeacherHome.jsx` to match the cleaner visual language used elsewhere:
   - Left accent strip (1px gradient) tone-derived from avg score (emerald / blue / amber / rose).
