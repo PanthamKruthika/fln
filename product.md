@@ -250,6 +250,19 @@ src/
 - 1 file changed, +29/-2.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 18 — Remove Generate Papers button from Teacher & School
+- Per project policy, paper generation is centralized on Superadmin.
+- `src/components/ClassRoster.jsx` (used by Teacher dashboard): dropped the indigo "Generate Worksheets" button; toolbar now shows only **Add Student**. Removed unused `FileText` import.
+- `src/pages/SchoolPrincipalDashboard.jsx`: dropped the indigo "Generate Papers" button; replaced with a disabled, tooltip-explained "Papers (Superadmin)" chip so the intent is visible.
+- `src/data/roles.js`: renamed the sidebar nav item from "Generate Papers" → **"Papers"** for both `school` and `teacher` roles (read-only view).
+- **Note:** Block Admin and Volunteer dashboards still have their "Generate Papers" buttons. The SRS §4 / §13.2 R-11 originally allowed `{Teacher↔School}` and `{Volunteer↔Block Admin}` generation pairs, but project policy centralizes on Superadmin — let me know if you want those stripped too.
+- Commit:
+  ```
+  feat(ui): remove Generate Papers button from Teacher & School
+  ```
+- 3 files changed, +11/-13.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ### Sample credentials (password: `Welcome1!`)
 | Role | Email |
 |---|---|
