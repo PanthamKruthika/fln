@@ -337,6 +337,24 @@ src/
 - 17 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 25 — Redesign My Classes page (cleaner, premium look)
+- Rewrote `src/pages/teacher/MyClasses.jsx` with a more breathable, Notion/Linear-style layout.
+- **Page summary strip** above the grid: `"4 classes · 132 students"` + class-average score (tone-colored) + secondary actions (View as list, All Students).
+- **2-column responsive grid** of class cards.
+- **Card improvements**
+  - Left accent strip (1px gradient) whose color is tone-derived from avg score (emerald / blue / amber / rose).
+  - Soft hover: shadow lift + 0.5px translate-up + border darkening.
+  - Clean header: small "Class · Section B" eyebrow, bold title "Class 3 · Section B", teacher underneath; status pill (On Track / Steady / Watch / Needs Attention) on the right with ring styling.
+  - Three metrics (Students / Avg Score / FLN Level) in a `divide-x` strip — no boxed pills, just typographic hierarchy. Values tone-colored for Avg Score + FLN Level.
+  - Gradient mastery bar with smooth width transition.
+  - Footer: secondary text links (Roster · Reports) on the left, dark "Open Class →" button on the right that turns blue on hover.
+- Commit:
+  ```
+  style(teacher): redesign My Classes page — cleaner, premium look
+  ```
+- 1 file changed, +149/-56.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ## Step 24 — Time-gate Download / Upload + remove Create Assessment
 - Per project policy + SRS §6.4: teachers no longer create assessments, they're announced.
 - **Download Question Paper** now enabled only during the **1-day-before → exam-start** print window.
