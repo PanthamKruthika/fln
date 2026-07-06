@@ -117,15 +117,30 @@ src/
 - Branch `scanning_verifying_answerpaper` pushed — upstream tracking set.
 - PR: https://github.com/PanthamKruthika/fln/pull/new/scanning_verifying_answerpaper
 
+## Step 11 — Create multi-role Login page
+- Added `src/pages/LoginPage.jsx`: centered white card on an indigo→violet→fuchsia gradient, role-selector grid replacing the usual login / sign-up / reset-password links.
+- Added `src/data/loginRoles.js`: role metadata (id, label, description, example email) for all 7 roles from SRS §4 — Superadmin, Admin, District Admin, Block Admin, School Principal, Teacher, Volunteer.
+- Updated `src/App.jsx` so `/` now resolves to `LoginPage`; `/teacher` still leads to the Teacher dashboard.
+- Email + password form with eye-toggle, mock validation (≥8 chars, 1 uppercase, 1 digit, 1 special per §A-3).
+- On valid submit, navigates to the role-specific dashboard route (`/superadmin`, `/admin`, `/district`, `/block`, `/school`, `/teacher`, `/volunteer`).
+- Dev-server verified — no console errors, only React Router v7 future-flag warnings.
+- Commit:
+  ```
+  feat: add login page with role selector for all 7 roles
+  ```
+- 3 files changed, 229 insertions.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ---
 
 ## Open follow-ups (not yet implemented)
 
 - [ ] Backend (`backend-node/`): Express + MongoDB + JWT + role middleware (§3, §13).
-- [ ] Login page (§3) wired to `/api/auth/login`.
+- [ ] Login page (§3) wired to `/api/auth/login` (replace mock validation).
 - [ ] Per-student detail drawer (level history + last report).
 - [ ] Generation-Lock Service + Delayed-Attempt/Defaulter Engine on backend (§13.2 R-11, R-12).
 - [ ] ICR scan interface (§8) in frontend.
 - [ ] Python automation services (`/automation`) for generation/evaluation.
 - [ ] Curriculum Markdown files under `/curriculum/levels/`.
 - [ ] Pre-built SVG asset library under `/assets/svg/`.
+- [ ] Re-attach the login-page design photo so UI matches the intended mock-up.
