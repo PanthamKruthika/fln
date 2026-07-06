@@ -85,11 +85,15 @@ curl -X POST http://localhost:5000/api/auth/login \
 
 ### Example: create the first Superadmin
 
+The first Superadmin is bootstrapped via a CLI seed script (no public registration endpoint exists by design — per SRS §1.3 / R-1).
+
 ```bash
-curl -X POST http://localhost:5000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Root Admin","email":"superadmin@fln.org","password":"Welcome1!","role":"superadmin"}'
+npm run seed:superadmin                      # uses defaults: superadmin@fln.org / Welcome1!
+# or pass overrides:
+node src/scripts/seedSuperadmin.js admin@fln.org Welcome1! "Root Admin"
 ```
+
+After the first Superadmin exists, that Superadmin (or any Admin) can provision further accounts by calling `POST /api/auth/register` with their JWT in the `Authorization: Bearer <token>` header — the endpoint is locked to `superadmin` / `admin` roles via middleware.
 
 ## Roles (SRS §4)
 
