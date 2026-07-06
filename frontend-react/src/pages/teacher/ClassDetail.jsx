@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
 import { useParams, useOutletContext, Link } from "react-router-dom";
-import { Users, GraduationCap, ClipboardList, FileText, ArrowLeft } from "lucide-react";
-import { classes, students, studentDetail } from "../../data/teacherData";
+import { Users, GraduationCap, ClipboardList, FileText, ArrowLeft, Download, Eye } from "lucide-react";
+import { classes, students, worksheets, assessments, studentDetail } from "../../data/teacherData";
 
-const tabs = ["Students", "Worksheets", "Assessments", "Reports", "Analytics"];
+const tabs = ["Students", "Question Papers", "Assessments", "Reports", "Analytics"];
+
+const handleDownload = (label, id) => {
+  console.log(`[download-question-paper] ${id}`);
+  alert(`Downloading question paper for:\n${label}`);
+};
 
 export default function ClassDetail() {
   const { classId } = useParams();
@@ -12,6 +17,8 @@ export default function ClassDetail() {
 
   const cls = classes.find((c) => c.id === classId);
   const classStudents = students.filter((s) => s.classId === classId);
+  const classWorksheets = worksheets.filter((w) => w.classId === classId);
+  const classAssessments = assessments.filter((a) => a.className.includes(cls?.name ?? ""));
 
   useEffect(() => {
     if (cls) {
@@ -35,14 +42,10 @@ export default function ClassDetail() {
 
   return (
     <div className="space-y-6">
-      <Link
-        to="/teacher/classes"
-        className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900"
-      >
+      <Link to="/teacher/classes" className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900">
         <ArrowLeft size={14} /> Back to My Classes
       </Link>
 
-      {/* Class info card */}
       <section className="bg-white rounded-xl border border-slate-200 p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-start gap-4">
@@ -64,7 +67,6 @@ export default function ClassDetail() {
         </div>
       </section>
 
-      {/* Tabs */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="border-b border-slate-200 px-2">
           <nav className="flex overflow-x-auto">
@@ -86,11 +88,11 @@ export default function ClassDetail() {
         </div>
 
         <div className="p-6">
-          {activeTab === "Students" && <StudentsTab rows={classStudents} />}
-          {activeTab === "Worksheets" && <SimpleTab rows={classStudents} icon={FileText} emptyLabel="No worksheets yet" />}
-          {activeTab === "Assessments" && <SimpleTab rows={classStudents} icon={ClipboardList} emptyLabel="No assessments yet" />}
-          {activeTab === "Reports" && <SimpleTab rows={classStudents} icon={FileText} emptyLabel="No reports yet" />}
-          {activeTab === "Analytics" && <SimpleTab rows={classStudents} icon={FileText} emptyLabel="Analytics coming soon" />}
+          {activeTab === "Students"     && <StudentsTab rows={classStudents} />}
+          {activeTab === "Question Papers" && <QuestionPapersTab rows={classWorksheets} />}
+          {activeTab === "Assessments"  && <AssessmentsTab rows={classAssessments} />}
+          {activeTab === "Reports"      && <EmptyTab icon={FileText}      label="No reports yet — generate one from the Reports page." />}
+          {activeTab === "Analytics"    && <EmptyTab icon={BarChartIcon}  label="Class analytics — view on the Analytics page." />}
         </div>
       </div>
     </div>
@@ -114,9 +116,7 @@ function StudentsTab({ rows }) {
           <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50/50">
             <td className="px-4 py-3 font-mono text-xs text-slate-600">{s.id}</td>
             <td className="px-4 py-3">
-              <Link to={`/teacher/students/${s.id}`} className="font-medium text-blue-600 hover:underline">
-                {s.name}
-              </Link>
+              <Link to={`/teacher/students/${s.id}`} className="font-medium text-blue-600 hover:underline">{s.name}</Link>
             </td>
             <td className="px-4 py-3 text-slate-700">{s.level}</td>
             <td className="px-4 py-3 text-right text-slate-700">{s.score}%</td>
@@ -138,17 +138,118 @@ function StudentsTab({ rows }) {
   );
 }
 
-function SimpleTab({ rows, icon: Icon, emptyLabel }) {
+function QuestionPapersTab({ rows }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-slate-500">{rows.length} question papers generated for this class.</p>
+        <Link to="/teacher/worksheets" className="text-xs text-blue-600 hover:text-blue-700">Generate new →</Link>
+      </div>
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+          <tr>
+            <th className="text-left px-4 py-3">Worksheet ID</th>
+            <th className="text-left px-4 py-3">Student</th>
+            <th className="text-left px-4 py-3">Generated</th>
+            <th className="text-left px-4 py-3">Level</th>
+            <th className="text-left px-4 py-3">Status</th>
+            <th className="text-right px-4 py-3">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((w) => (
+            <tr key={w.id} className="border-t border-slate-100 hover:bg-slate-50/50">
+              <td className="px-4 py-3 font-mono text-xs text-slate-700">{w.id}</td>
+              <td className="px-4 py-3 font-medium text-slate-900">{w.student}</td>
+              <td className="px-4 py-3 text-slate-700">{w.generatedAt}</td>
+              <td className="px-4 py-3">
+                <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-xs font-medium">{w.level}</span>
+              </td>
+              <td className="px-4 py-3">
+                <span className={[
+                  "px-2 py-0.5 rounded-md text-xs font-medium",
+                  w.status === "Completed" ? "bg-emerald-50 text-emerald-700"
+                    : w.status === "Printed" ? "bg-violet-50 text-violet-700"
+                    : w.status === "Downloaded" ? "bg-blue-50 text-blue-700"
+                    : "bg-amber-50 text-amber-700",
+                ].join(" ")}>{w.status}</span>
+              </td>
+              <td className="px-4 py-3 text-right">
+                <button
+                  onClick={() => handleDownload(`${w.student} · ${w.id}`, w.id)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
+                >
+                  <Download size={12} /> Download
+                </button>
+              </td>
+            </tr>
+          ))}
+          {rows.length === 0 ? (
+            <tr><td colSpan={6} className="text-center py-10 text-slate-400">No question papers yet for this class.</td></tr>
+          ) : null}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AssessmentsTab({ rows }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-slate-500">{rows.length} assessments for this class.</p>
+        <Link to="/teacher/assessments" className="text-xs text-blue-600 hover:text-blue-700">All assessments →</Link>
+      </div>
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+          <tr>
+            <th className="text-left px-4 py-3">Assessment</th>
+            <th className="text-left px-4 py-3">Date</th>
+            <th className="text-left px-4 py-3">Status</th>
+            <th className="text-right px-4 py-3">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((a) => (
+            <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50/50">
+              <td className="px-4 py-3 font-medium text-slate-900">{a.name}</td>
+              <td className="px-4 py-3 text-slate-700">{a.date}</td>
+              <td className="px-4 py-3">
+                <span className={[
+                  "px-2 py-0.5 rounded-md text-xs font-medium",
+                  a.status === "Completed" ? "bg-emerald-50 text-emerald-700"
+                    : a.status === "Scheduled" ? "bg-blue-50 text-blue-700"
+                    : "bg-amber-50 text-amber-700",
+                ].join(" ")}>{a.status}</span>
+              </td>
+              <td className="px-4 py-3 text-right">
+                <button
+                  onClick={() => handleDownload(`${a.name} · ${a.className}`, a.id)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
+                >
+                  <Download size={13} /> Download Question Paper
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function EmptyTab({ icon: Icon, label }) {
   return (
     <div className="text-center py-12">
       <div className="w-14 h-14 mx-auto rounded-xl bg-slate-50 text-slate-400 grid place-items-center">
         <Icon size={22} />
       </div>
-      <p className="text-slate-500 mt-3">{emptyLabel}</p>
-      <p className="text-xs text-slate-400 mt-1">({rows.length} students in this class)</p>
+      <p className="text-slate-500 mt-3">{label}</p>
     </div>
   );
 }
+
+const BarChartIcon = ClipboardList;
 
 function Mini({ icon: Icon, label, value, color }) {
   return (

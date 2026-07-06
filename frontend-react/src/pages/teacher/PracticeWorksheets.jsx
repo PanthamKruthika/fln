@@ -98,10 +98,15 @@ export default function PracticeWorksheets() {
                     ].join(" ")}>{w.status}</span>
                   </td>
                   <td className="px-5 py-3 text-right">
-                    <div className="inline-flex gap-1">
-                      <button title="Preview" className="p-1.5 rounded-md text-slate-600 hover:bg-slate-100"><Eye size={14} /></button>
-                      <button title="Download" className="p-1.5 rounded-md text-blue-600 hover:bg-blue-50"><Download size={14} /></button>
-                      <button title="Regenerate" className="p-1.5 rounded-md text-amber-600 hover:bg-amber-50"><RotateCcw size={14} /></button>
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
+                        title="Download Question Paper"
+                      >
+                        <Download size={12} /> Download
+                      </button>
+                      <button title="Preview"     className="p-1.5 rounded-md text-slate-600 hover:bg-slate-100"><Eye size={14} /></button>
+                      <button title="Regenerate"  className="p-1.5 rounded-md text-amber-600 hover:bg-amber-50"><RotateCcw size={14} /></button>
                     </div>
                   </td>
                 </tr>

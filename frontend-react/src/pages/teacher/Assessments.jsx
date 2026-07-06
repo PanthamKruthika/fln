@@ -1,7 +1,13 @@
 import { useEffect } from "react";
 import { useOutletContext, Link } from "react-router-dom";
-import { Plus, Calendar, Eye, Upload, BarChart3 } from "lucide-react";
+import { Plus, Calendar, Eye, Upload, BarChart3, Download, FileText } from "lucide-react";
 import { assessments } from "../../data/teacherData";
+
+const handleDownloadPaper = (a) => {
+  // Placeholder — wires to backend POST /api/assessments/:id/paper.pdf later.
+  console.log(`[download-question-paper] ${a.id} — ${a.name}`);
+  alert(`Downloading question paper for:\n${a.name}\n${a.className} · ${a.date}`);
+};
 
 export default function Assessments() {
   const { setPageMeta } = useOutletContext();
@@ -66,10 +72,16 @@ export default function Assessments() {
                       <span className="text-slate-400 ml-1">({completionPct}%)</span>
                     </td>
                     <td className="px-5 py-3 text-right">
-                      <div className="inline-flex gap-1">
+                      <div className="inline-flex items-center gap-2">
+                        <button
+                          onClick={() => handleDownloadPaper(a)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
+                        >
+                          <Download size={13} /> Download Question Paper
+                        </button>
                         <button title="View" className="p-1.5 rounded-md text-slate-600 hover:bg-slate-100"><Eye size={14} /></button>
                         {a.status !== "Scheduled" && (
-                          <Link to="/teacher/upload" className="p-1.5 rounded-md text-blue-600 hover:bg-blue-50" title="Upload Scripts">
+                          <Link to="/teacher/upload" className="p-1.5 rounded-md text-emerald-600 hover:bg-emerald-50" title="Upload Scripts">
                             <Upload size={14} />
                           </Link>
                         )}
