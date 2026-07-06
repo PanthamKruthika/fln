@@ -292,6 +292,23 @@ src/
 - 1 file changed, +18/-12.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 21 — Database schema design (docs/db-schema.md)
+- New file `docs/db-schema.md` with a full schema layout for the FLN platform.
+- Covers all 18 collections from SRS §10:
+  - `users` (built) + `states`, `districts`, `blocks`, `schools`, `classes`, `students`
+  - `curriculum`, `worksheets`, `answerSubmissions`, `evaluationReports`
+  - `certifications`, `svgAssets`, `assetSubstitutionLog`, `promptTemplates`
+  - `logbook`, `announcements`, `tickets`
+- Each collection entry has fields/types, sample shape, indexes, and the SRS section it implements.
+- Includes an ASCII ER overview, relationships summary, and field conventions (human-readable IDs, dual Aadhar pattern, soft-delete via flags, cycle+year everywhere).
+- Includes a build-priority order for the Mongoose models.
+- Commit:
+  ```
+  docs: add comprehensive database schema design (db-schema.md)
+  ```
+- 1 file added, 536 insertions.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ### Sample credentials (password: `Welcome1!`)
 | Role | Email |
 |---|---|
