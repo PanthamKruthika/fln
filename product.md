@@ -337,6 +337,23 @@ src/
 - 17 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 24 — Time-gate Download / Upload + remove Create Assessment
+- Per project policy + SRS §6.4: teachers no longer create assessments, they're announced.
+- **Download Question Paper** now enabled only during the **1-day-before → exam-start** print window.
+- **Upload Answer Scripts** now enabled only during the **post-exam-end + 1 hour** submission window.
+- New `src/utils/examPhase.js` with `getExamPhase(date)` returning one of `too_early | print_window | exam_window | submission_window | closed` plus `canDownload` / `canUpload` flags.
+- `assessments` mock data now generated as a function so demo rows land in each phase (12h away, 15 min away, 1h ago, 2h ago, 65 days away) regardless of when opened.
+- **Assessments page** — removed Create/Schedule CTAs; each row shows a phase badge + Lock-styled disabled button when action isn't currently allowed.
+- **ClassDetail → Assessments tab** — same gating applied.
+- **UploadScripts page** — reads `?assessment=…` from the query; shows an amber "Upload locked" guard when the chosen assessment isn't in the submission window.
+- Timing-rules legend added at the bottom of the Assessments page.
+- Commit:
+  ```
+  feat(teacher): time-gate download/upload per SRS §6.4 + remove Create
+  ```
+- 5 files changed, +382/-97.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ## Step 23 — Add "Download Question Paper" button (4 places)
 - Teachers need to print question papers before the exam (SRS §6.4 — 1-hour print window).
 - Added a prominent **Download Question Paper** button in:
