@@ -337,6 +337,46 @@ src/
 - 17 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 31 — bbox-aware per-type extraction pipeline
+- The previous pipeline pretended Python "magically" knew answers. Rewrote around the correct flow: **crop bbox → dispatch by `qtype` → per-type extractor**.
+- **Schema extensions** (`schemas.py`)
+  - `BBox` (x, y, w, h in PDF points) + `Region` (labelled sub-region)
+  - `Question.qtype` ∈ `handwriting | number | multiple_choice | circle | matching | tick | trace | drawing`
+  - `WorksheetTemplate` carries `page_w`/`page_h` so coords are unambiguous
+  - `Question.regions[]` for circle/matching/tick questions
+- **Stage 1 — extraction**
+  - `icr/pdf_converter.py` — `pdf2image` at 200 DPI
+  - `icr/cropper.py` — converts PDF points → pixel crop with bounds-clamping
+  - `extractors/` — one module per qtype:
+    | qtype | Production algorithm |
+    |---|---|
+    | handwriting | Tesseract / PaddleOCR → text |
+    | number | OCR → numeric (validated in `compare()`) |
+    | multiple_choice | per-bubble **fill density** |
+    | circle | **HoughCircles** + region-overlap |
+    | matching | **HoughLinesP** + endpoint-region mapping |
+    | tick | per-checkbox **inner-stroke ink density** |
+    | trace | skeletonize + **Hausdorff** distance to expected_signature |
+    | drawing | small CNN / CLIP zero-shot classifier |
+- **Stage 2 — marking** (`scoring/comparator.py`) updated to switch on `qtype` for all 8 types.
+- **Sample data** — `worksheet_template.json` with bboxes + regions for all 5 new types; `scanned_sheets.json` updated with per-student per-extractor answers.
+- **New HTTP endpoint** — `POST /extract-and-evaluate` (multipart: `pdf` + `template` JSON) runs Stage 1 + Stage 2 in one call.
+- **Verified end-to-end**
+  | Student | Score | Level |
+  |---|---|---|
+  | STU-001 (topper) | 5/6 (83%) | L3 · L3 |
+  | STU-002 (average) | 2/6 (33%) | L3 · L3 |
+  | STU-003 (struggling) | 1/6 (17%) | L2 → L1 |
+  - Level-Flag (R-15) flagged `Q2, Q3, Q5`.
+  - Each report shows which extractor handled which question (`handwriting-ocr-demo`, `circle-detector-demo`, `matching-line-demo`, `tick-detector-demo`, `drawing-classifier-demo`).
+- README rewritten with the bbox-crop-then-dispatch flow.
+- Commit:
+  ```
+  feat(automation): bbox-aware per-type extraction pipeline
+  ```
+- 21 files changed.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ## Step 30 — Python Evaluation Pipeline (FastAPI)
 - Scaffolded the `/automation` Python service per **SRS §5 / §9 Stage 1–3**: scanned PDF → ICR/OCR → compare with answer key → per-question marks → concept mastery → level progression → narrative report.
 - **Modules**
