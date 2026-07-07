@@ -337,6 +337,23 @@ src/
 - 17 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 32 — Production-ready MongoDB schema (15 collections)
+- Implemented all 15 collections per the supplied spec, in `backend-node/src/models/`.
+- **Shared** — `enums.js` centralises all role/status/board/medium/question-type/level/assessment-status enums + regex patterns (UDISE+ 11-digit, PINCODE, Indian mobile).
+- **Geography** — `State`, `District`, `School` with UDISE+ as unique school key, embedded address, scoped indexes.
+- **People** — `User` (bcrypt + firstName/lastName + scope fields + select:false on password + backward-compat hook for the legacy `name` field), `Class`, `Student` (embedded parentDetails + address).
+- **Assessment pipeline** — `Assessment` (lifecycle status), `Worksheet` (embedded `Question[]` with `boundingBox` + `regions[]`), `WorksheetAssignment` (junction), `StudentSubmission` (embedded `ExtractedAnswer[]`), `Evaluation` (embedded `levelMastery` + `conceptMastery`), `AIReport`.
+- **Auxiliary** — `StudentProgress`, `Notification` (per-teacher, optional TTL), `AuditLog` (append-only by convention).
+- **Cross-cutting** — `timestamps: true`, `toJSON` transform strips `__v` + remaps `_id → id`, embedded sub-schemas use `_id: false`, password hashing on User save, indexing optimised for the most common dashboard queries.
+- Barrel export (`models/index.js`) and `models/README.md` with embedded-vs-referenced design decisions + index list.
+- **Verified** — All 15 models load; all 7 role logins + `/api/me` still work after extending User (backward-compat hook preserves old `name`-only accounts).
+- Commit:
+  ```
+  feat(backend): production-ready MongoDB schema (15 collections)
+  ```
+- 19 files added, 3 changed.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ## Step 31 — bbox-aware per-type extraction pipeline
 - The previous pipeline pretended Python "magically" knew answers. Rewrote around the correct flow: **crop bbox → dispatch by `qtype` → per-type extractor**.
 - **Schema extensions** (`schemas.py`)
