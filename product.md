@@ -337,6 +337,39 @@ src/
 - 17 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 30 — Python Evaluation Pipeline (FastAPI)
+- Scaffolded the `/automation` Python service per **SRS §5 / §9 Stage 1–3**: scanned PDF → ICR/OCR → compare with answer key → per-question marks → concept mastery → level progression → narrative report.
+- **Modules**
+  - `schemas.py` — Pydantic models matching SRS §12.1 (Question, WorksheetTemplate, ExtractedSheet, EvaluationReport, PerQuestionResult, ConceptMastery, LevelProgression).
+  - `icr/extract.py` — OCR loader + `simulate_ocr_sheet()` for demos.
+  - `scoring/comparator.py` — `compare()` handling all 4 answer types:
+    - `multiple_choice` — exact letter match
+    - `number` — ±tolerance with **partial credit** within 2× tolerance
+    - `text` — NFKD-normalized + punctuation-stripped lowercase
+    - `drawing` — flagged for manual review (CV pipeline placeholder)
+  - `scoring/aggregator.py` — concept mastery banding, strengths/weaknesses, mistake patterns (carry/borrowing/money), level progression, **Level-Flag rule (R-15)**.
+  - `reports/narrative.py` — AI-style narrative paragraph.
+  - `pipeline.py` — `evaluate_student()` / `evaluate_class()` orchestrator.
+  - `main.py` — FastAPI app (`GET /health`, `POST /evaluate`, `POST /evaluate/synthetic`).
+- **Sample data**
+  - `sample/answer_key.json` — 15-question Class-2 Mid-Year paper (Number Sense, Addition, Subtraction, Shapes, Money, Time, Patterns, Drawing).
+  - `sample/scanned_sheets.json` — 3 student OCR outputs (topper / average / struggling).
+- **Verified end-to-end**:
+  | Student | Score | Level |
+  |---|---|---|
+  | STU-001 (topper) | 14/15 (93%) | L3 → **L4** |
+  | STU-002 (average) | 10/15 (67%) | L3 · L3 |
+  | STU-003 (struggling) | 6/15 (40%) | L2 → **L1** |
+  - Level-Flag (R-15) flagged `Q3, Q9` (>50% failed despite "easy" tag).
+- CLI runner `test_pipeline.py` and `README.md` with HTTP examples + Node wiring sketch.
+- venv + .gitignore keep Python out of git.
+- Commit:
+  ```
+  feat(automation): Python evaluation pipeline (FastAPI + sample paper)
+  ```
+- 12 files added, 1 changed.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ## Step 29 — Replace My Classes card grid with a clean row list
 - The dashboard "My Classes" section was 4 small cards with status pills, mastery bars, and 4 buttons each — too busy.
 - Replaced with a **single clean row list** (Google-Classroom / Notion-style) inside one rounded card:
