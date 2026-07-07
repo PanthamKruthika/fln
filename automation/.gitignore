@@ -1,0 +1,11 @@
+# Python automation service — keeps venv out of git
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.uv-cache/
+
+# Local-only outputs
+out/
+*.log
