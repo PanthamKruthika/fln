@@ -337,6 +337,51 @@ src/
 - 17 files added, 1 changed.
 - Pushed to `scanning_verifying_answerpaper`.
 
+## Step 33 — AI Assessment Template Builder (full pipeline)
+Implements the Super Admin flow end-to-end: **Create Assessment → Upload Question Paper PDF → AI extracts the answer-key → Admin reviews/edits → Approve**.
+
+**Backend (Node + Mongoose)**
+- `backend-node/src/models/AssessmentTemplate.js` — new collection (separate from Worksheet). Embedded `questions[]` with `questionNo`, `questionText`, `questionType`, `concept`, `difficulty`, `level`, `marks`, `correctAnswer`, `answerOptions`, `provenance`. Workflow status: `draft → approved → archived`.
+- `backend-node/src/routes/assessmentRoutes.js` — mounted at `/api/assessments`:
+  - `POST /` create · `GET /` list · `GET /:id` · `PATCH /:id`
+  - `POST /template/upload` (multipart: pdf + grade + subject + assessmentId + worksheetType) → forwards to Python + saves draft
+  - `PUT /template/:templateId` (edit) · `POST /template/:templateId/approve`
+  - `GET /template/by-assessment/:assessmentId` · `GET /template/:templateId`
+- `backend-node/src/services/audit.js` — append-only audit-log helper used by every mutating route.
+- `uploads/questionpapers/` directory for stored PDFs (gitignored).
+
+**Python (FastAPI · automation/template_builder.py)**
+- `POST /assessment-template/extract` (multipart: pdf + grade) — pipeline:
+  1. PDF → images via pdf2image (graceful fallback if poppler missing)
+  2. OCR via PaddleOCR if available (graceful fallback to deterministic mock otherwise)
+  3. Rule-based AI analysis → classifies each question by `questionType`, `concept`, `difficulty`, `level`, `marks`, `correctAnswer`, `answerOptions`
+- `GET /health`
+
+**Frontend (React)**
+- `frontend-react/src/pages/superadmin/SuperAdminAssessments.jsx` — list + create-form modal for Assessments; per-row "Generate Template" button.
+- `frontend-react/src/pages/superadmin/AssessmentTemplateBuilder.jsx` — two-step flow:
+  - Step 1: Drop / choose PDF → backend extraction
+  - Step 2: Editable per-question grid (text + type + concept + difficulty + level + marks + correct answer) with **Save Edits** + **Approve** buttons; provenance auto-flips to `human-edited` on any field change.
+- `frontend-react/src/pages/SuperAdminDashboard.jsx` — gradient call-to-action strip linking to `/superadmin/assessments`.
+- `App.jsx` — added nested routes `/superadmin/assessments` and `/superadmin/assessments/:assessmentId/template`.
+
+**Verified end-to-end**
+| Step | Result |
+|---|---|
+| `POST /api/assessments` | `201` — created |
+| `POST /api/assessments/template/upload` | `201` — 15 AI-extracted questions (source: mock, falls back gracefully) |
+| `GET /template/by-assessment/:id` | 1 template, `status=draft` |
+| `PUT /template/:id` (admin edits) | Q1 answer updated to `"5"`, `provenance=human-edited` |
+| `POST /template/:id/approve` | `status=approved`, `approvedBy` + `approvedAt` set |
+| MongoDB verify | `AssessmentTemplate` persisted with 2 questions, `status=approved`, `sourcePdf=q.pdf` |
+
+- Commit:
+  ```
+  feat: AI Assessment Template Builder (full pipeline)
+  ```
+- 9 files added, 5 changed.
+- Pushed to `scanning_verifying_answerpaper`.
+
 ## Step 32 — Production-ready MongoDB schema (15 collections)
 - Implemented all 15 collections per the supplied spec, in `backend-node/src/models/`.
 - **Shared** — `enums.js` centralises all role/status/board/medium/question-type/level/assessment-status enums + regex patterns (UDISE+ 11-digit, PINCODE, Indian mobile).
