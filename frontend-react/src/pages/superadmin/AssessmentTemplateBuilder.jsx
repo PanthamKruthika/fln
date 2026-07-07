@@ -45,6 +45,9 @@ export default function AssessmentTemplateBuilder() {
   const [templateId, setTemplateId] = useState("");
   const [pdfFile, setPdfFile] = useState(null);
   const [error, setError] = useState("");
+  const [lastResponse, setLastResponse] = useState(null);
+  const [extractionSource, setExtractionSource] = useState("");
+  const [extractionNotes, setExtractionNotes] = useState("");
   const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   const [templateStatus, setTemplateStatus] = useState("draft");
@@ -104,13 +107,28 @@ export default function AssessmentTemplateBuilder() {
         body: fd,
       });
       const data = await resp.json();
+      console.log("[template-builder] response:", data);
+      setLastResponse(data);
       if (!resp.ok) throw new Error(data.message || "Upload failed");
-      setQuestions(data.extraction.questions);
-      setTemplateId(data.extraction.templateId);
-      setSource(data.extraction.source);
-      setNotes(data.extraction.notes || "");
+
+      const extraction = data.extraction || {};
+      const extracted = Array.isArray(extraction.questions) ? extraction.questions : [];
+      console.log("[template-builder] extracted questions:", extracted.length, extracted);
+
+      setQuestions(extracted);
+      setTemplateId(extraction.templateId || "");
+      setSource(extraction.source || "");
+      setExtractionSource(extraction.source || "");
+      setExtractionNotes(extraction.notes || "");
+      setNotes(extraction.notes || "");
       setTemplateStatus("draft");
-      setPhase("edit");
+
+      if (extracted.length > 0) {
+        setPhase("edit");
+      } else {
+        setError(`No questions extracted (source: ${extraction.source || "none"}). ${extraction.notes || ""}`);
+        setPhase("upload");
+      }
     } catch (err) {
       setError(err.message);
       setPhase("upload");
@@ -196,9 +214,23 @@ export default function AssessmentTemplateBuilder() {
       <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
         {error ? (
           <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-sm text-rose-700">
-            {error}
+            <b>Error:</b> {error}
           </div>
         ) : null}
+
+        {/* Debug panel — shows what we got back from the server */}
+        {lastResponse && (
+          <details className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-600">
+            <summary className="cursor-pointer font-medium text-slate-700">
+              🔍 Debug · questions: <b className="text-blue-700">{questions.length}</b>
+              {extractionSource && <> · source: <b>{extractionSource}</b></>}
+              {extractionNotes && <> · notes: <i>{extractionNotes.slice(0, 80)}…</i></>}
+            </summary>
+            <pre className="mt-2 text-[11px] font-mono whitespace-pre-wrap break-all bg-white p-2 rounded border border-slate-100">
+              {JSON.stringify(lastResponse, null, 2).slice(0, 4000)}
+            </pre>
+          </details>
+        )}
 
         {/* ---------- Step 1: Upload the question paper (always the entry point) ---------- */}
         {phase === "upload" && (
