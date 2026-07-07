@@ -1,3 +1,6 @@
 node_modules/
 .env
 *.log
+
+# Uploaded PDFs (large, regenerated each run; uncomment to track)
+uploads/questionpapers/*.pdf
