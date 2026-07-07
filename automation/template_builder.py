@@ -4,19 +4,23 @@ Flow
 ----
 1. Node POSTs the uploaded PDF to /assessment-template/extract
    (multipart: pdf + grade + subject + academicYear).
-2. Python extracts real text via PyMuPDF (no poppler / OCR engine
-   required — works on any machine out of the box).
-3. Question text is split by "Q1. / Q2. / …" markers.
-4. Rule-based "AI analysis" step classifies each question into
-   qtype / concept / difficulty / level / marks / correctAnswer.
+2. Python renders each PDF page as an image (PyMuPDF).
+3. Image(s) are sent to Google Gemini (gemini-2.0-flash) which
+   returns structured JSON of the questions it can read.
+4. The heuristic post-processor enriches each question with
+   concept / difficulty / level / marks / answerOptions.
 5. Returns the structured template to Node.
 
-If the PDF has no extractable text (scanned image-only PDF) and
-PaddleOCR is installed, the pipeline falls back to OCR. If neither
-works, returns a clear `notes` field rather than fake data.
+If no GEMINI_API_KEY is set, falls back to:
+   - PyMuPDF text extraction + heuristic parsing, or
+   - the deterministic mock for image-only PDFs.
 """
 from __future__ import annotations
 
+import base64
+import io
+import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -26,139 +30,161 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 
-# Make sibling-package imports work when uvicorn is launched from
-# the automation/ directory.
 sys.path.insert(0, str(Path(__file__).parent))
 
 
 app = FastAPI(
     title="FLN Template Builder",
-    version="0.2.0",
-    description="PDF → text → AI question analysis (PyMuPDF-backed)",
+    version="0.3.0",
+    description="PDF → image → Gemini vision → AI question analysis",
 )
 
 
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip()
+
+
 # --------------------------------------------------------------------------- #
-# Stage 1 — extract raw text from the PDF (PyMuPDF, no poppler needed)
+# Stage 1 — render PDF pages as PNG images (PyMuPDF)
 # --------------------------------------------------------------------------- #
+
+def render_pdf_pages_as_images(pdf_path: Path, dpi: int = 200) -> list[bytes]:
+    """Return one PNG per page."""
+    import fitz
+    doc = fitz.open(str(pdf_path))
+    images: list[bytes] = []
+    zoom = dpi / 72
+    matrix = fitz.Matrix(zoom, zoom)
+    for page in doc:
+        pix = page.get_pixmap(matrix=matrix, alpha=False)
+        images.append(pix.tobytes("png"))
+    doc.close()
+    return images
+
 
 def extract_pdf_text(pdf_path: Path) -> tuple[str, str]:
-    """Return (text, source) where source is 'pymupdf' or 'paddleocr'
-    or 'empty'."""
     try:
-        import fitz  # PyMuPDF
+        import fitz
     except Exception:
         return "", "pymupdf-missing"
-
     try:
         doc = fitz.open(str(pdf_path))
+        chunks = [p.get_text("text") for p in doc]
+        doc.close()
+        return "\n".join(chunks).strip(), "pymupdf"
     except Exception as e:
-        print(f"[template_builder] PyMuPDF open failed: {e}")
+        print(f"[template_builder] PyMuPDF text failed: {e}")
         return "", "pymupdf-error"
 
-    chunks: list[str] = []
-    for page in doc:
-        chunks.append(page.get_text("text"))
-    doc.close()
-    return "\n".join(chunks).strip(), "pymupdf"
 
+# --------------------------------------------------------------------------- #
+# Stage 2 — Gemini vision call
+# --------------------------------------------------------------------------- #
 
-def extract_pdf_text_with_ocr(pdf_path: Path) -> tuple[str, str]:
-    """Fallback OCR — only used when PyMuPDF returns nothing."""
-    try:
-        from paddleocr import PaddleOCR  # type: ignore
-    except Exception:
-        # Last-resort mock so the demo always works
-        return _MOCK_TEXT, "mock"
+GEMINI_PROMPT = """You are an expert at reading student worksheets.
 
-    try:
-        # Rasterise pages first
-        try:
-            from pdf2image import convert_from_path
-        except Exception:
-            return _MOCK_TEXT, "mock"
+The attached image is a scanned page from an Indian primary-school
+mathematics worksheet (Class {grade}, {subject}). Read every question
+on the page carefully and return them as JSON.
 
-        import numpy as np
-        ocr = PaddleOCR(use_angle_cls=False, lang="en", show_log=False)
-        lines: list[str] = []
-        for img in convert_from_path(str(pdf_path), dpi=200):
-            arr = np.asarray(img.convert("RGB"))
-            result = ocr.ocr(arr, cls=False)
-            for page in result or []:
-                for line in page or []:
-                    if len(line) >= 2 and line[1]:
-                        lines.append(line[1][0])
-        text = "\n".join(lines).strip()
-        return (text, "paddleocr") if text else (_MOCK_TEXT, "mock")
-    except Exception:
-        return _MOCK_TEXT, "mock"
+Return ONLY this JSON shape, no prose, no markdown fences:
 
+{{
+  "questions": [
+    {{
+      "questionNo": 1,
+      "questionText": "the full question text exactly as printed",
+      "questionType": "number | handwriting | multiple_choice | circle | matching | tick | trace | drawing",
+      "correctAnswer": "the answer, if visible on the page (number, letter, or short string). Empty string if not shown.",
+      "answerOptions": [{{"label": "A", "text": "..."}}]   // only for multiple_choice / matching / circle / tick, else null
+    }}
+  ]
+}}
 
-# Used only when both real extraction AND OCR fail. Lets the demo run.
-_MOCK_TEXT = """
-Q1. Count the apples.
-Q2. What comes after 29?
-Q3. Circle the bigger number: 47 or 74.
-Q4. 12 + 5 = ___
-Q5. 23 + 18 = ___
-Q6. 45 - 7 = ___
-Q7. Raju has 25 mangoes. He gives 9 to his sister. How many are left?
-Q8. Which shape has 3 sides? (A) Square (B) Triangle (C) Circle
-Q9. Tick the largest object: book  pencil  eraser
-Q10. How many rupees is 3 notes of 5 rupees?
-Q11. 1 rupee = ___ paise
-Q12. What is the missing number? 5, 10, ___, 20, 25
-Q13. What time is shown? 3:00. (A) 1 (B) 3 (C) 5
-Q14. How many sides does a rectangle have?
-Q15. Draw a clock showing 4 o'clock
+Rules:
+- questionNo counts from 1 within THIS page; the server merges pages
+  and re-numbers consecutively.
+- questionType guidance:
+    number            — fill-in-the-blank with a single number answer
+    handwriting       — student writes a word/short phrase
+    multiple_choice   — has options A) B) C) D)
+    circle            — student circles an object
+    matching          — student draws lines connecting two columns
+    tick              — student ticks one or more boxes
+    trace             — student traces a dotted path
+    drawing           — student draws a picture (clock, shape, etc.)
+- answerOptions is required ONLY for multiple_choice / matching /
+  circle / tick (give the choices / items the student sees).
+- correctAnswer: best-effort. If a sample answer is printed next to
+  the question (like "Ans: 5"), use that. Otherwise "".
+- Do not invent questions. Only return what is actually on the page.
+- If the page has no questions, return {{"questions": []}}.
 """
 
 
+def call_gemini_on_pages(page_images: list[bytes], grade: int, subject: str) -> list[dict]:
+    """Send all pages to Gemini as inline images; return merged
+    list of {questionNo, questionText, questionType, correctAnswer,
+    answerOptions} dicts across all pages."""
+    if not GEMINI_API_KEY:
+        return []
+    try:
+        from google import genai
+        from google.genai import types
+    except Exception as e:
+        print(f"[template_builder] google-genai import failed: {e}")
+        return []
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    parts: list[types.Part] = [
+        types.Part.from_text(
+            text=GEMINI_PROMPT.format(grade=grade, subject=subject)
+        )
+    ]
+    for img_bytes in page_images:
+        parts.append(types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
+
+    try:
+        resp = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=parts,
+            config=types.GenerateContentConfig(
+                temperature=0.0,
+                response_mime_type="application/json",
+            ),
+        )
+    except Exception as e:
+        print(f"[template_builder] Gemini call failed: {e}")
+        return []
+
+    raw = (resp.text or "").strip()
+    # Strip any stray code fences just in case
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
+        raw = re.sub(r"\s*```\s*$", "", raw)
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        print(f"[template_builder] Gemini JSON parse failed: {e}; raw={raw[:200]}")
+        return []
+    questions = data.get("questions", [])
+    if not isinstance(questions, list):
+        return []
+    return questions
+
+
 # --------------------------------------------------------------------------- #
-# Stage 2 — parse questions out of the raw text
-# --------------------------------------------------------------------------- #
-
-# Matches "Q1.", "Q1)", "Q 1.", "1.", "1)" — the Q is optional, the
-# number is what we group by.
-QUESTION_HEADER_RE = re.compile(
-    r"^\s*(?:Q\s*)?(\d+)[\.\)]\s*(.+?)(?=^\s*(?:Q\s*)?\d+[\.\)]|\Z)",
-    re.IGNORECASE | re.MULTILINE | re.DOTALL,
-)
-
-
-def parse_questions(text: str) -> list[tuple[int, str]]:
-    """Return ordered list of (question_no, question_text)."""
-    matches = QUESTION_HEADER_RE.findall(text)
-    parsed: list[tuple[int, str]] = []
-    seen: set[int] = set()
-    for raw_no, body in matches:
-        try:
-            no = int(raw_no)
-        except ValueError:
-            continue
-        body = " ".join(body.split()).strip()
-        # Filter out anything that looks like an OCR artefact
-        if len(body) < 4:
-            continue
-        if no in seen:
-            continue
-        seen.add(no)
-        parsed.append((no, body))
-    parsed.sort(key=lambda t: t[0])
-    return parsed
-
-
-# --------------------------------------------------------------------------- #
-# Stage 3 — rule-based "AI" classification
+# Stage 3 — heuristic enrichment (concept / difficulty / level / marks)
 # --------------------------------------------------------------------------- #
 
 CONCEPT_KEYWORDS = {
-    "Counting":         ["count", "how many", "dots", "objects", "fingers", "tally"],
+    "Counting":         ["count", "how many", "dots", "objects", "fingers", "tally", "stars"],
     "Number Sense":     ["write the number", "what comes after", "before", "between",
                          "compare", "bigger", "smaller", "number", "place value"],
     "Addition":         ["+", " plus ", " add ", "sum", "total", "more"],
     "Subtraction":      ["- ", " minus ", " subtract ", "left", "away", "difference",
-                         "remaining", "give away"],
+                         "remaining", "give away", "left with"],
     "Patterns":         ["next", "pattern", "skip", "skip counting", "comes next",
                          "missing number"],
     "Shapes":           ["circle", "square", "triangle", "rectangle", "shape",
@@ -172,22 +198,7 @@ CONCEPT_KEYWORDS = {
     "Data Handling":    ["graph", "chart", "table", "tally", "data"],
 }
 
-TYPE_PATTERNS = [
-    ("multiple_choice", [r"\bA\)", r"\bB\)", r"\bC\)", r"\bD\)",
-                          r"\(A\)", r"\(B\)", r"\(C\)", r"\(D\)"]),
-    ("matching",        [r"match", r"--+", r"→"]),
-    ("circle",          [r"circle", r"ring around", r"encircle"]),
-    ("tick",            [r"tick", r"check", r"put a ✓", r"put a tick", r"mark"]),
-    ("trace",           [r"trace", r"follow the dotted"]),
-    ("drawing",         [r"draw", r"sketch", r"show "]),
-    ("handwriting",     [r"write\b", r"fill in", r"answer is", r"what is\b"]),
-]
-
 NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
-ANSWER_HINT_RE = re.compile(
-    r"(?:answer\s*(?:is)?\s*[:\-=]?\s*|=\s*)([\d]+(?:\.\d+)?|[A-D])\b",
-    re.IGNORECASE,
-)
 
 
 def _classify_concept(text: str) -> str:
@@ -198,23 +209,6 @@ def _classify_concept(text: str) -> str:
         if score > best_score:
             best, best_score = concept, score
     return best
-
-
-def _classify_type(text: str) -> str:
-    # MCQ — only if there's also an "answer is" hint OR one of the
-    # letters is mentioned by name.
-    for qtype, patterns in TYPE_PATTERNS:
-        for pat in patterns:
-            if re.search(pat, text, re.IGNORECASE):
-                # numeric questions default to "number" even if they
-                # mention a number; only classify as mcq if explicitly
-                # an option-letter question.
-                if qtype == "multiple_choice":
-                    if re.search(r"\b[ABCD]\b", text) and not re.search(r"\b\d+\s*[\+\-]\s*\d+\b", text):
-                        return qtype
-                else:
-                    return qtype
-    return "number"
 
 
 def _infer_difficulty(question_no: int, total: int) -> str:
@@ -233,49 +227,51 @@ def _infer_level(grade: int) -> str:
     return f"L{grade}"
 
 
-def _suggest_correct_answer(text: str, qtype: str) -> str:
-    """Best-effort guess. Real impl would call an LLM."""
-    m = ANSWER_HINT_RE.search(text)
-    if m:
-        return m.group(1)
-    nums = NUMBER_RE.findall(text)
-    if nums and qtype in ("number", "handwriting"):
-        return nums[-1]
-    if qtype == "multiple_choice":
-        m = re.search(r"\b([A-D])\b\s*\)", text)
-        if m:
-            return m.group(1)
-    return ""
-
-
-def _suggest_options(text: str, qtype: str):
-    if qtype == "multiple_choice":
-        # try to extract "A) foo  B) bar" style options
-        opts = re.findall(r"\b([A-D])\)\s*([^A-D\n\r]+)", text)
-        if opts:
-            return [{"label": l, "text": v.strip()} for l, v in opts]
-        return [{"label": c, "text": ""} for c in "ABCD"]
-    if qtype == "matching":
-        pairs = re.findall(r"([A-Za-z][A-Za-z0-9 ]{0,30})\s*-+\s*([A-Za-z][A-Za-z0-9 ]{0,30})", text)
-        if pairs:
-            return [{"left": l.strip(), "right": r.strip()} for l, r in pairs]
-    return None
-
-
-def analyze_question(text: str, question_no: int, total: int, grade: int) -> dict:
-    qtype = _classify_type(text)
+def enrich(raw: dict, idx: int, total: int, grade: int) -> dict:
+    text = (raw.get("questionText") or "").strip()
+    qtype = (raw.get("questionType") or "number").strip()
+    answer = (raw.get("correctAnswer") or "").strip()
+    options = raw.get("answerOptions")  # may be None / list / dict
     return {
-        "questionNo":     question_no,
+        "questionNo":     idx + 1,
         "questionText":    text,
         "questionType":    qtype,
         "concept":         _classify_concept(text),
-        "difficulty":      _infer_difficulty(question_no, total),
+        "difficulty":      _infer_difficulty(idx, total),
         "level":           _infer_level(grade),
         "marks":           1,
-        "correctAnswer":   _suggest_correct_answer(text, qtype),
-        "answerOptions":   _suggest_options(text, qtype),
-        "provenance":      "ai",
+        "correctAnswer":   answer,
+        "answerOptions":   options,
+        "provenance":      "gemini-ai" if GEMINI_API_KEY else "ai",
     }
+
+
+# --------------------------------------------------------------------------- #
+# Heuristic fallback (text-only path, no LLM)
+# --------------------------------------------------------------------------- #
+
+QUESTION_HEADER_RE = re.compile(
+    r"^\s*(?:Q\s*)?(\d+)[\.\)]\s*(.+?)(?=^\s*(?:Q\s*)?\d+[\.\)]|\Z)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+
+
+def parse_questions_from_text(text: str) -> list[tuple[int, str]]:
+    matches = QUESTION_HEADER_RE.findall(text)
+    parsed: list[tuple[int, str]] = []
+    seen: set[int] = set()
+    for raw_no, body in matches:
+        try:
+            no = int(raw_no)
+        except ValueError:
+            continue
+        body = " ".join(body.split()).strip()
+        if len(body) < 4 or no in seen:
+            continue
+        seen.add(no)
+        parsed.append((no, body))
+    parsed.sort(key=lambda t: t[0])
+    return parsed
 
 
 # --------------------------------------------------------------------------- #
@@ -326,41 +322,73 @@ def _build_response(
     academic_year: str,
     template_id: str | None,
 ) -> ExtractResponse:
-    text, source = extract_pdf_text(pdf_path)
-    if not text:
-        text, source = extract_pdf_text_with_ocr(pdf_path)
+    notes_parts: list[str] = []
 
-    parsed = parse_questions(text)
-    notes = ""
+    # 1. Render PDF pages as images
+    try:
+        page_images = render_pdf_pages_as_images(pdf_path, dpi=200)
+    except Exception as e:
+        print(f"[template_builder] PDF render failed: {e}")
+        page_images = []
 
-    if source == "pymupdf":
-        notes = f"Text extracted directly from PDF via PyMuPDF. No OCR needed."
-    elif source == "paddleocr":
-        notes = "Text extracted via PaddleOCR (image-based PDF)."
-    elif source == "mock":
-        notes = (
-            "OCR engine not installed and PDF text was not extractable. "
-            "Returning a demo question set so the UI can be exercised. "
-            "Install paddleocr for image-based PDFs."
+    raw_questions: list[dict] = []
+    source = ""
+
+    # 2. Prefer Gemini vision if API key + pages
+    if GEMINI_API_KEY and page_images:
+        raw_questions = call_gemini_on_pages(page_images, grade, subject)
+        if raw_questions:
+            source = f"gemini ({GEMINI_MODEL})"
+            notes_parts.append(
+                f"Questions extracted by Google Gemini ({GEMINI_MODEL}) vision model."
+            )
+
+    # 3. Fallback — PyMuPDF text + heuristic parsing
+    if not raw_questions:
+        text, src = extract_pdf_text(pdf_path)
+        if text:
+            parsed = parse_questions_from_text(text)
+            if parsed:
+                raw_questions = [
+                    {"questionNo": n, "questionText": t,
+                     "questionType": "number", "correctAnswer": "", "answerOptions": None}
+                    for n, t in parsed
+                ]
+                source = f"{src} + heuristic"
+                notes_parts.append(
+                    "GEMINI_API_KEY not set; fell back to PyMuPDF text extraction + heuristic parsing."
+                )
+            else:
+                notes_parts.append("Could not parse questions from the PDF text.")
+        else:
+            notes_parts.append("PDF text could not be extracted.")
+
+    # 4. Enrich + renumber consecutively
+    total = len(raw_questions)
+    enriched = [enrich(q, i, total, grade) for i, q in enumerate(raw_questions)]
+
+    if total == 0:
+        notes_parts.append(
+            "No questions detected. Make sure GEMINI_API_KEY is set or that the PDF has extractable text."
         )
-    else:
-        notes = f"Extraction source: {source}"
-
-    total = len(parsed)
-    questions = [analyze_question(t, n, total, grade)
-                 for n, t in parsed]
 
     return ExtractResponse(
         templateId=template_id or f"TEMP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
-        questions=questions,
+        questions=enriched,
         totalQuestions=total,
-        totalMarks=sum(q["marks"] for q in questions),
+        totalMarks=sum(q["marks"] for q in enriched),
         generatedAt=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        source=source,
-        notes=notes,
+        source=source or "none",
+        notes=" ".join(notes_parts),
     )
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "service": "fln-template-builder", "version": app.version}
+    return {
+        "ok": True,
+        "service": "fln-template-builder",
+        "version": app.version,
+        "gemini_configured": bool(GEMINI_API_KEY),
+        "gemini_model": GEMINI_MODEL,
+    }
