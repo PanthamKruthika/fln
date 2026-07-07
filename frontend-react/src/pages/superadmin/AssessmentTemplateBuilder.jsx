@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Loader2,
   Edit3,
+  History,
 } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 
@@ -37,18 +38,22 @@ export default function AssessmentTemplateBuilder() {
   const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
 
   const [assessment, setAssessment] = useState(null);
+  const [existingTemplate, setExistingTemplate] = useState(null);
+  // phase: "upload" (always the entry point) | "edit" (after extraction) | "saving"
+  const [phase, setPhase] = useState("upload");
   const [questions, setQuestions] = useState([]);
   const [templateId, setTemplateId] = useState("");
   const [pdfFile, setPdfFile] = useState(null);
-  const [phase, setPhase] = useState("idle"); // idle | uploading | done | saving
   const [error, setError] = useState("");
   const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   const [templateStatus, setTemplateStatus] = useState("draft");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let alive = true;
     (async () => {
+      setLoading(true);
       try {
         const [a, t] = await Promise.all([
           fetch(`${API_BASE}/api/assessments/${assessmentId}`, { headers: authHeaders }).then((r) => r.json()),
@@ -57,13 +62,14 @@ export default function AssessmentTemplateBuilder() {
         if (!alive) return;
         setAssessment(a);
         const latest = Array.isArray(t) && t[0];
-        if (latest) {
-          setQuestions(latest.questions || []);
-          setTemplateId(latest.templateId);
-          setTemplateStatus(latest.status);
-        }
+        if (latest) setExistingTemplate(latest);
+        // ALWAYS start on the upload step — that's what
+        // "Generate Template" is supposed to do.
+        setPhase("upload");
       } catch (e) {
         setError(e.message);
+      } finally {
+        if (alive) setLoading(false);
       }
     })();
     return () => { alive = false; };
@@ -86,7 +92,7 @@ export default function AssessmentTemplateBuilder() {
     try {
       const fd = new FormData();
       fd.append("pdf", pdfFile);
-      fd.append("grade", String(assessment?.classId ? 2 : 2)); // grade hint
+      fd.append("grade", "2");
       fd.append("subject", "Numeracy");
       fd.append("academicYear", "2025-26");
       fd.append("assessmentId", assessmentId);
@@ -104,18 +110,25 @@ export default function AssessmentTemplateBuilder() {
       setSource(data.extraction.source);
       setNotes(data.extraction.notes || "");
       setTemplateStatus("draft");
-      setPhase("done");
+      setPhase("edit");
     } catch (err) {
       setError(err.message);
-      setPhase("idle");
+      setPhase("upload");
     }
+  };
+
+  const continueWithExisting = () => {
+    if (!existingTemplate) return;
+    setQuestions(existingTemplate.questions || []);
+    setTemplateId(existingTemplate.templateId);
+    setTemplateStatus(existingTemplate.status);
+    setPhase("edit");
   };
 
   const handleSave = async (approve = false) => {
     setPhase("saving");
     setError("");
     try {
-      // Save edits
       const resp = await fetch(`${API_BASE}/api/assessments/template/${templateId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", ...authHeaders },
@@ -131,12 +144,20 @@ export default function AssessmentTemplateBuilder() {
         if (!resp2.ok) throw new Error(await resp2.text());
         setTemplateStatus("approved");
       }
-      setPhase("done");
+      setPhase("edit");
     } catch (err) {
       setError(err.message);
-    } finally {
-      setPhase("idle");
     }
+  };
+
+  const startOver = () => {
+    setQuestions([]);
+    setTemplateId("");
+    setSource("");
+    setNotes("");
+    setTemplateStatus("draft");
+    setError("");
+    setPhase("upload");
   };
 
   const updateQ = (i, patch) =>
@@ -179,44 +200,72 @@ export default function AssessmentTemplateBuilder() {
           </div>
         ) : null}
 
-        {/* Step 1: Upload PDF */}
-        {questions.length === 0 && (
-          <section className="bg-white rounded-xl border border-slate-200 p-6">
-            <h2 className="font-semibold text-slate-900 mb-1">Step 1 — Upload the question paper</h2>
-            <p className="text-sm text-slate-500 mb-4">
-              Drop the PDF below. We'll convert it to images, run OCR, then have AI classify each
-              question by type, concept, difficulty, and suggested correct answer.
-            </p>
+        {/* ---------- Step 1: Upload the question paper (always the entry point) ---------- */}
+        {phase === "upload" && (
+          <>
+            {/* Banner if an existing template is on file */}
+            {existingTemplate && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <History size={18} className="text-amber-700 mt-0.5 shrink-0" />
+                  <div>
+                    <div className="text-sm font-medium text-amber-900">
+                      Existing template found: <span className="font-mono">{existingTemplate.templateId}</span>
+                    </div>
+                    <div className="text-xs text-amber-800 mt-0.5">
+                      Status: {existingTemplate.status} · {existingTemplate.questions?.length || 0} questions · uploaded {new Date(existingTemplate.updatedAt).toLocaleString()}
+                    </div>
+                    <div className="text-xs text-amber-800 mt-1">
+                      Uploading a new PDF will <b>replace</b> this template.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={continueWithExisting}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-medium hover:bg-amber-700 shrink-0"
+                >
+                  Continue editing existing →
+                </button>
+              </div>
+            )}
 
-            <label className="border-2 border-dashed border-slate-300 hover:border-blue-400 rounded-xl p-10 text-center block cursor-pointer transition">
-              <Upload size={28} className="mx-auto text-slate-400 mb-2" />
-              <p className="text-sm text-slate-700 font-medium">
-                {pdfFile ? pdfFile.name : "Click to choose a PDF, or drop one here"}
+            <section className="bg-white rounded-xl border border-slate-200 p-6">
+              <h2 className="font-semibold text-slate-900 mb-1">Upload the question paper</h2>
+              <p className="text-sm text-slate-500 mb-4">
+                Drop the PDF below. We'll convert it to images, run OCR, then have AI classify each
+                question by type, concept, difficulty, and suggested correct answer.
               </p>
-              <p className="text-xs text-slate-400 mt-1">PDF up to 50 MB</p>
-              <input type="file" accept="application/pdf" onChange={handleFile} className="hidden" />
-            </label>
 
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                onClick={handleUpload}
-                disabled={!pdfFile || phase === "uploading"}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-60"
-              >
-                {phase === "uploading" ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                {phase === "uploading" ? "Extracting…" : "Extract & Analyze"}
-              </button>
-            </div>
-          </section>
+              <label className="border-2 border-dashed border-slate-300 hover:border-blue-400 rounded-xl p-10 text-center block cursor-pointer transition">
+                <Upload size={28} className="mx-auto text-slate-400 mb-2" />
+                <p className="text-sm text-slate-700 font-medium">
+                  {pdfFile ? pdfFile.name : "Click to choose a PDF, or drop one here"}
+                </p>
+                <p className="text-xs text-slate-400 mt-1">PDF up to 50 MB</p>
+                <input type="file" accept="application/pdf" onChange={handleFile} className="hidden" />
+              </label>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  onClick={handleUpload}
+                  disabled={!pdfFile || phase === "uploading"}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {phase === "uploading" ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                  {phase === "uploading" ? "Extracting…" : "Extract & Analyze"}
+                </button>
+              </div>
+            </section>
+          </>
         )}
 
-        {/* Step 2: Preview + Edit */}
-        {questions.length > 0 && (
+        {/* ---------- Step 2: Review + edit ---------- */}
+        {phase !== "upload" && questions.length > 0 && (
           <>
             <section className="bg-white rounded-xl border border-slate-200 p-6">
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <h2 className="font-semibold text-slate-900">Step 2 — Review &amp; edit the AI-extracted template</h2>
+                  <h2 className="font-semibold text-slate-900">Review &amp; edit the AI-extracted template</h2>
                   <p className="text-sm text-slate-500">
                     Template ID: <span className="font-mono">{templateId}</span> · {questions.length} questions · {totalMarks} marks
                     {source && <span className="ml-2 text-xs italic">(source: {source})</span>}
@@ -224,6 +273,12 @@ export default function AssessmentTemplateBuilder() {
                   {notes && <p className="text-xs text-slate-500 mt-1 italic">{notes}</p>}
                 </div>
                 <div className="flex gap-2">
+                  <button
+                    onClick={startOver}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 text-sm hover:bg-slate-50"
+                  >
+                    <Upload size={14} /> Upload different PDF
+                  </button>
                   <button
                     onClick={() => handleSave(false)}
                     disabled={phase === "saving"}
@@ -336,12 +391,7 @@ export default function AssessmentTemplateBuilder() {
               <Link to="/superadmin/assessments" className="hover:text-slate-700 inline-flex items-center gap-1">
                 <ArrowLeft size={12} /> Back to Assessments
               </Link>
-              <button
-                onClick={() => { setQuestions([]); setTemplateId(""); setPhase("idle"); }}
-                className="text-rose-600 hover:text-rose-700"
-              >
-                Start over with a different PDF
-              </button>
+              <span>Source: {source || "—"}</span>
             </div>
           </>
         )}
