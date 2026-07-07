@@ -324,17 +324,19 @@ def _build_response(
 ) -> ExtractResponse:
     notes_parts: list[str] = []
 
-    # 1. Render PDF pages as images
+    # 1. Render PDF pages as images (for Gemini vision path)
+    page_images: list[bytes] = []
+    render_error: str = ""
     try:
         page_images = render_pdf_pages_as_images(pdf_path, dpi=200)
     except Exception as e:
+        render_error = str(e)
         print(f"[template_builder] PDF render failed: {e}")
-        page_images = []
 
     raw_questions: list[dict] = []
     source = ""
 
-    # 2. Prefer Gemini vision if API key + pages
+    # 2. Prefer Gemini vision if API key + pages are available
     if GEMINI_API_KEY and page_images:
         raw_questions = call_gemini_on_pages(page_images, grade, subject)
         if raw_questions:
@@ -344,8 +346,10 @@ def _build_response(
             )
 
     # 3. Fallback — PyMuPDF text + heuristic parsing
+    text = ""
+    pdf_src = ""
     if not raw_questions:
-        text, src = extract_pdf_text(pdf_path)
+        text, pdf_src = extract_pdf_text(pdf_path)
         if text:
             parsed = parse_questions_from_text(text)
             if parsed:
@@ -354,23 +358,36 @@ def _build_response(
                      "questionType": "number", "correctAnswer": "", "answerOptions": None}
                     for n, t in parsed
                 ]
-                source = f"{src} + heuristic"
+                source = f"{pdf_src} + heuristic"
                 notes_parts.append(
                     "GEMINI_API_KEY not set; fell back to PyMuPDF text extraction + heuristic parsing."
                 )
             else:
                 notes_parts.append("Could not parse questions from the PDF text.")
-        else:
-            notes_parts.append("PDF text could not be extracted.")
 
-    # 4. Enrich + renumber consecutively
+    # 4. If we still have nothing, build a very specific, actionable
+    #    error message so the admin knows what to fix.
+    if not raw_questions:
+        if not text and not GEMINI_API_KEY:
+            notes_parts.append(
+                "PDF appears to be image-based (no extractable text). "
+                "Set GEMINI_API_KEY in backend-node/.env to enable Gemini vision OCR. "
+                "Get a free key at https://aistudio.google.com/app/apikey"
+            )
+        elif not text and GEMINI_API_KEY and not page_images:
+            notes_parts.append(
+                f"PyMuPDF could not rasterize the PDF ({render_error or 'unknown error'}). "
+                "Re-export the PDF or upload a different one."
+            )
+        elif not text and GEMINI_API_KEY:
+            notes_parts.append(
+                "PDF text could not be extracted AND Gemini returned no questions. "
+                "Try a clearer scan or a text-based PDF."
+            )
+
+    # 5. Enrich + renumber consecutively
     total = len(raw_questions)
     enriched = [enrich(q, i, total, grade) for i, q in enumerate(raw_questions)]
-
-    if total == 0:
-        notes_parts.append(
-            "No questions detected. Make sure GEMINI_API_KEY is set or that the PDF has extractable text."
-        )
 
     return ExtractResponse(
         templateId=template_id or f"TEMP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
