@@ -1,6 +1,9 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import User, { ROLES_ENUM } from "../models/User.js";
+import User from "../models/User.js";
+import { USER_ROLES } from "../models/enums.js";
+
+const ROLES_ENUM = USER_ROLES;
 
 const PASSWORD_RE = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>]).{8,}$/;
 
@@ -19,7 +22,7 @@ export async function login(req, res, next) {
       return res.status(400).json({ message: "Invalid email or password" });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await User.findOne({ email: email.toLowerCase() }).select("+password");
     if (!user || !user.isActive) {
       return res.status(401).json({ message: "Invalid email or password" });
     }

@@ -1,5 +1,7 @@
 import jwt from "jsonwebtoken";
-import { ROLES_ENUM } from "../models/User.js";
+import { USER_ROLES } from "../models/enums.js";
+
+const ROLES_ENUM = USER_ROLES;
 
 export function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
