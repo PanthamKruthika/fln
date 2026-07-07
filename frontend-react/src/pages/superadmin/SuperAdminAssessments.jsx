@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Plus, ArrowLeft, FileText, Sparkles, Calendar } from "lucide-react";
-import { useAuth } from "../contexts/AuthContext";
+import { useAuth } from "../../contexts/AuthContext";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
 const ASSESSMENT_TYPES = ["Diagnostic", "Practice", "Summative"];
