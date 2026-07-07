@@ -13,9 +13,21 @@ const app = express();
 console.log("PORT:", process.env.PORT);
 console.log("CORS_ORIGIN:", process.env.CORS_ORIGIN);
 
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN,
+    origin: (origin, cb) => {
+      // Allow same-origin / curl / server-to-server (no Origin header).
+      if (!origin) return cb(null, true);
+      if (ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin)) {
+        return cb(null, true);
+      }
+      return cb(new Error(`CORS: origin ${origin} not allowed`));
+    },
     credentials: true,
   })
 );
