@@ -1,18 +1,55 @@
 # FLN Automation Service (Python · FastAPI)
 
-End-to-end evaluation pipeline for scanned answer sheets. Per **SRS §5** and **§9** Stage 1-3:
+End-to-end evaluation pipeline for scanned answer sheets. Per **SRS §5** and **§9** Stages 1-3:
 
 ```
-Scanned PDF  →  ICR/OCR  →  Compare with answer key  →  Per-question marks
-                                                          ↓
-                            Concept mastery  →  Level progression  →  Narrative report
+                          Stage 1 (per-type extraction)
+                          ─────────────────────────────
+
+  Scanned PDF  →  pdf2image  →  per-page images
+                                    │
+                                    ▼
+                       For each Question on its page:
+                         crop bbox  →  dispatch by qtype
+                                    │
+              ┌─────────┬──────────┼──────────┬──────────┐
+              ▼         ▼          ▼          ▼          ▼
+         handwriting  number      mcq      circle   matching  tick  trace  drawing
+         (OCR)       (OCR)      (bubble)  (Hough)  (HoughP)  (ink) (path)  (CNN)
+              │         │          │          │          │       │     │       │
+              └─────────┴──────────┴──────────┴──────────┴───────┴─────┴───────┘
+                                              │
+                                              ▼
+                              answer dictionary per student
+                                              │
+                                              ▼
+                          Stage 2 (marking + report)
+                          ──────────────────────────
+
+                Compare with answer key
+                          │
+                          ▼
+            Per-question results  →  concept mastery
+                          │              │
+                          ▼              ▼
+                  overall score     strengths / weaknesses
+                          │              │
+                          ▼              ▼
+                   level progression  narrative report
+                          │
+                          ▼
+                   EvaluationReport
 ```
 
 ## Stack
 
 | Concern | Tool |
 |---|---|
-| HTTP | `fastapi` + `uvicorn` |
+| HTTP | `fastapi` + `uvicorn` + `python-multipart` |
+| PDF → image | `pdf2image` (poppler) |
+| Image I/O | `Pillow` |
+| Computer vision | `opencv-python-headless` |
+| Numerics | `numpy` |
 | Validation | `pydantic` |
 | Python | 3.14 |
 
@@ -20,100 +57,113 @@ Scanned PDF  →  ICR/OCR  →  Compare with answer key  →  Per-question marks
 
 ```
 automation/
-├── main.py                 # FastAPI app (POST /evaluate, /evaluate/synthetic)
-├── schemas.py              # Pydantic models (Question, Worksheet, Answer, Report…)
-├── pipeline.py             # end-to-end orchestrator
-├── scoring/
-│   ├── comparator.py       # per-question comparison (number/text/MCQ/drawing)
-│   └── aggregator.py       # concept mastery + level progression + mistake patterns
-├── reports/
-│   └── narrative.py        # AI-style narrative generator
+├── main.py                 # FastAPI app
+├── schemas.py              # Pydantic models — Question, WorksheetTemplate, BBox, ExtractedAnswer…
+├── pipeline.py             # extract_sheet_from_pdf + evaluate_student + evaluate_class
 ├── icr/
-│   └── extract.py          # OCR loader + tiny simulator
+│   ├── pdf_converter.py     # PDF → per-page PIL images
+│   └── cropper.py           # PDF-coordinate bbox → pixel crop
+├── extractors/              # ONE MODULE PER QUESTION TYPE
+│   ├── _base.py
+│   ├── handwriting.py       # OCR → text
+│   ├── number_writer.py     # OCR → numeric
+│   ├── multiple_choice.py   # bubble fill density
+│   ├── circle.py            # HoughCircles + region overlap
+│   ├── matching.py          # HoughLinesP + region overlap
+│   ├── tick.py              # inner-stroke ink density
+│   ├── trace.py             # Hausdorff distance to expected path
+│   └── drawing.py           # small CNN / CLIP classifier
+├── scoring/
+│   ├── comparator.py        # per-question compare() (handles all 8 qtypes)
+│   └── aggregator.py        # mastery / strengths / weakness / mistake patterns / level / level-flag
+├── reports/
+│   └── narrative.py         # AI-style narrative paragraph
 ├── sample/
-│   ├── answer_key.json     # 15-question Class 2 Mid-Year paper
-│   └── scanned_sheets.json # 3 student OCR outputs (topper / average / struggling)
-├── test_pipeline.py        # CLI demo runner
-└── .venv/                  # python venv (gitignored)
+│   ├── worksheet_template.json  # 6-question paper with bboxes + regions per qtype
+│   ├── answer_key.json          # same questions, expected answers only
+│   └── scanned_sheets.json      # 3 student OCR outputs
+├── test_pipeline.py         # CLI demo
+└── .venv/                   # python venv (gitignored)
 ```
 
-## How marking works
+## How extraction actually works (per question type)
 
-The `compare()` function in `scoring/comparator.py` handles all four answer types:
-
-| `answer_type` | Rule | Partial credit? |
-|---|---|---|
-| `multiple_choice` | Letter match (case-insensitive) | ❌ |
-| `number` | Numeric match within `±tolerance` (default 0) | ✅ within `2 × tolerance` |
-| `text` | NFKD-normalized + punctuation-stripped lowercase match | ❌ |
-| `drawing` | Flagged for manual review (CV pipeline placeholder) | ❌ |
-
-After per-question comparison, `aggregator.py` produces:
-
-- **Concept mastery** — groups results by `topic`, bands into `Strong / Developing / Needs Practice`.
-- **Strengths / weaknesses** — top-3 and bottom-3 topics by mastery %.
-- **Mistake patterns** — heuristic detection (e.g. "Borrowing errors in subtraction", "Carry errors in addition", "Money / currency conversion errors").
-- **Level progression** — promote if ≥80% + no weak topics, demote if <50% + ≤1 strong topic, else stay.
-- **Level-Flag rule (R-15)** — aggregated across students; flags any easy question that <50% of attempting students got right.
+| `qtype` | What Python does |
+|---|---|
+| `handwriting` | crops bbox → **Tesseract / PaddleOCR** on the crop → text |
+| `number` | same as handwriting, then parses to float, validated in `compare()` |
+| `multiple_choice` | for each labelled `region` (one bubble per choice), crops that bubble, computes **fill density** = dark px / total px. The chosen option is the region with the highest density above a threshold. |
+| `circle` | crops bbox → **HoughCircles** to find drawn circle(s) → for each circle, find which `region` (Triangle/Square/Circle label) it overlaps → return that label |
+| `matching` | crops bbox → **HoughLinesP** to find lines → for each line, find which `region` the leftmost endpoint is in and which `region` the rightmost endpoint is in → return pairs like `Rectangle-Door,Circle-Button` |
+| `tick` | for each labelled `region` (one checkbox), crops it, looks for **dark blob in the centre** (the ✓ shape) → ticked region wins |
+| `trace` | skeletonize the crop, compare to `expected_signature` via **Hausdorff distance** → match / partial / miss |
+| `drawing` | **CNN / CLIP zero-shot** classifier → label like `clock_4oclock`. Empty crop → `drawing_missing`. |
 
 ## Quick start
 
 ```bash
 cd automation
 
-# 1. Run the bundled demo (3 students × 15-question paper)
+# CLI demo
 .venv/bin/python test_pipeline.py
 
-# 2. Or run the HTTP service
+# HTTP service
 .venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 5050
-
-# 3. Hit it
-curl http://127.0.0.1:5050/health
-curl -X POST http://127.0.0.1:5050/evaluate/synthetic
 ```
 
 ## HTTP API
 
-| Method | Path | Purpose |
+| Method | Path | Body | Purpose |
+|---|---|---|---|
+| `GET`  | `/health` | — | Liveness probe |
+| `POST` | `/evaluate` | `EvaluateRequest` JSON | Stage 2 only — pass pre-extracted sheets |
+| `POST` | `/extract-and-evaluate` | `multipart` form | Stage 1 + 2 — upload PDF + template JSON |
+| `POST` | `/evaluate/synthetic` | — | Demo: runs on bundled sample data |
+
+### `/extract-and-evaluate` form fields
+
+| Field | Type | |
 |---|---|---|
-| `GET`  | `/health` | Liveness probe |
-| `POST` | `/evaluate` | Production endpoint — pass scanned sheets + worksheet JSON |
-| `POST` | `/evaluate/synthetic` | Demo — runs the bundled sample |
+| `pdf` | file | Scanned answer sheets PDF |
+| `student_id` | string | `STU-001` etc. |
+| `template` | string | JSON-serialised `WorksheetTemplate` |
+| `previous_level` | string | (optional) default `L3` |
 
-`POST /evaluate` body:
+## Wiring with backend-node
 
-```json
-{
-  "worksheet": { "exam_id": "...", "class_level": 2, "cycle": "Mid-Year", "questions": [ ... ] },
-  "sheets":    [ { "student_id": "STU-001", "page": 1, "answers": [ ... ] } ],
-  "previous_levels": { "STU-001": "L3" }
-}
-```
-
-Response: `{ reports: [EvaluationReport…], flagged_questions: ["Q3","Q9"] }`
-
-## Wiring with the Node backend
-
-`backend-node` should call this service from its `/api/evaluation/submit` route. Sketch:
+`backend-node` should call this service from `/api/evaluation/submit` and persist the report into MongoDB (see `docs/db-schema.md`).
 
 ```js
 // backend-node/src/controllers/evaluationController.js
 import axios from "axios";
+import FormData from "form-data";
+import fs from "fs";
 
 export async function evaluate(req, res) {
-  const { sheets, worksheet } = req.body;
-  const { data } = await axios.post("http://127.0.0.1:5050/evaluate", {
-    sheets, worksheet, previous_levels: req.body.previous_levels,
+  const pdf = fs.readFileSync(req.file.path);
+  const form = new FormData();
+  form.append("pdf", pdf, req.file.originalname);
+  form.append("student_id", req.body.student_id);
+  form.append("template", JSON.stringify(req.worksheet));
+  form.append("previous_level", req.body.previous_level ?? "L3");
+
+  const { data } = await axios.post("http://127.0.0.1:5050/extract-and-evaluate", form, {
+    headers: form.getHeaders(),
   });
-  res.json(data);  // persist reports + flagged_questions into MongoDB
+  // persist data.reports[0] into MongoDB
+  res.json(data);
 }
 ```
 
-(Add `axios` to backend deps and add a `AUTOMATION_URL=http://127.0.0.1:5050` to `.env`.)
+## TODO / production hardening
 
-## What's still TODO
-
-- Replace the mock ICR loader with a real PDF → Tesseract OCR pipeline (`pdfplumber` + `pytesseract`).
-- Drawing evaluation — hook up a small image classifier (TF/Keras) to score clock drawings etc.
-- Persist `EvaluationReport` and `AnswerSubmission` into MongoDB (Node side, see `docs/db-schema.md`).
-- Confidence-aware scoring: down-weight low-confidence OCR answers.
+- Replace `_DEMO` dicts in each extractor with real implementations.
+- `handwriting.py` → `pytesseract.image_to_string(crop, config='--psm 7')` (single line) or PaddleOCR.
+- `multiple_choice.py` → binarize each bubble region, fill_density = dark / total.
+- `circle.py` → `cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, …)` then test circle-region overlap.
+- `matching.py` → `cv2.HoughLinesP` + endpoint-region mapping.
+- `tick.py` → inner-stroke ink density.
+- `trace.py` → skeletonize + Hausdorff.
+- `drawing.py` → small CNN (MobileNet fine-tune) or CLIP zero-shot.
+- Persist `EvaluationReport` and `AnswerSubmission` into MongoDB.
+- Add review-queue UI for any report with `confidence < 0.6` (manual teacher review).

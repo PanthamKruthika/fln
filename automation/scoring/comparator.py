@@ -14,10 +14,10 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from schemas import Question, StudentAnswer, PerQuestionResult
+from schemas import ExtractedAnswer, PerQuestionResult, Question
 
 
-def compare(question: Question, student: StudentAnswer | None) -> PerQuestionResult:
+def compare(question: Question, student: ExtractedAnswer | None) -> PerQuestionResult:
     if student is None or student.answer.strip() == "":
         return PerQuestionResult(
             question_id=question.question_id,
@@ -37,7 +37,7 @@ def compare(question: Question, student: StudentAnswer | None) -> PerQuestionRes
     actual = student.answer.strip()
     expected = question.answer.strip()
 
-    if question.answer_type == "multiple_choice":
+    if question.qtype == "multiple_choice":
         correct = actual.upper() == expected.upper()
         return PerQuestionResult(
             question_id=question.question_id,
@@ -54,7 +54,7 @@ def compare(question: Question, student: StudentAnswer | None) -> PerQuestionRes
             comment="" if correct else "Selected the wrong option",
         )
 
-    if question.answer_type == "number":
+    if question.qtype == "number":
         actual_n = _to_number(actual)
         expected_n = _to_number(expected)
         if actual_n is None or expected_n is None:
@@ -108,7 +108,7 @@ def compare(question: Question, student: StudentAnswer | None) -> PerQuestionRes
             comment=f"Off by {diff:g}",
         )
 
-    if question.answer_type == "drawing":
+    if question.qtype == "drawing":
         # Real impl would compare CV-extracted signature strings.
         # For the demo we accept any non-blank drawing as "Reviewed"
         # and treat drawing_missing as wrong.

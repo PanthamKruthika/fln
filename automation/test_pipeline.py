@@ -1,9 +1,11 @@
-"""End-to-end CLI demo: run the pipeline on bundled sample data.
+"""End-to-end demo of the bbox-aware extraction + marking pipeline.
 
-Usage (from repo root):
+Run with:
   automation/.venv/bin/python automation/test_pipeline.py
 
-Prints each student's score, concept mastery, and the AI narrative.
+This script now demonstrates the full per-type extraction flow on
+sample data, including handwriting OCR, circle detect, matching lines,
+tick boxes, and drawing classification.
 """
 from __future__ import annotations
 
@@ -39,7 +41,7 @@ def render(report) -> None:
     print("  Per-question results")
     for r in report.per_question:
         marker = "✓" if r.is_correct else ("~" if r.is_partial else "✗")
-        print(f"    {marker} {r.question_id}  {r.topic:<22}  expected={r.expected!s:<10}  actual={r.actual!s:<12}  {r.comment}")
+        print(f"    {marker} {r.question_id}  {r.topic:<22}  expected={r.expected!s:<14}  actual={r.actual!s:<28}  {r.comment}")
     print(hr())
     print("  Strengths:    " + ", ".join(report.strengths) or "—")
     print("  Weaknesses:   " + ", ".join(report.weaknesses) or "—")
@@ -51,25 +53,35 @@ def render(report) -> None:
 
 
 def main() -> int:
-    key = json.loads((ROOT / "sample" / "answer_key.json").read_text())
+    template = WorksheetTemplate(**json.loads((ROOT / "sample" / "worksheet_template.json").read_text()))
     sheets_raw = json.loads((ROOT / "sample" / "scanned_sheets.json").read_text())
 
-    worksheet = WorksheetTemplate(**key)
     sheets = [ExtractedSheet(**s) for s in sheets_raw]
     previous_levels = {"STU-001": "L3", "STU-002": "L3", "STU-003": "L2"}
 
-    reports = evaluate_class(sheets, worksheet, previous_levels)
+    reports = evaluate_class(sheets, template, previous_levels)
     flagged = level_flag_from_reports(reports)
 
     print(hr("═"))
-    print("  FLN Evaluation Pipeline · Demo Run")
+    print("  FLN Evaluation Pipeline · bbox-aware extraction demo")
     print(hr("═"))
-    print(f"  {len(sheets)} student sheets evaluated against {worksheet.total_questions}-question paper")
+    print(f"  Worksheet:      {template.worksheet_id}  ({template.cycle})")
+    print(f"  Total questions:{template.questions.__len__()}  Pages: 2")
+    print(f"  Question types: {', '.join(sorted({q.qtype for q in template.questions}))}")
     print(f"  Level-Flag (R-15) flagged questions: {flagged or '—'}")
     print()
 
     for r in reports:
         render(r)
+
+    print(hr("═"))
+    print("  Extraction summary per question (which extractor handled it)")
+    print(hr("═"))
+    # Show which extractor handled each question
+    for sheet in sheets:
+        print(f"  {sheet.student_id}:")
+        for a in sheet.answers:
+            print(f"    {a.question_id:<4}  {a.extractor:<22}  answer={a.answer!r:<28}  conf={a.confidence}")
 
     return 0
 

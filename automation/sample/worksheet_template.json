@@ -1,8 +1,10 @@
 {
+  "worksheet_id": "WS-DEMO-CLASS2-MY",
   "exam_id": "AS-2026-MY-CLASS2",
   "class_level": 2,
-  "total_questions": 6,
   "cycle": "Mid-Year",
+  "page_w": 595.0,
+  "page_h": 842.0,
   "questions": [
     {
       "question_id": "Q1",
@@ -67,7 +69,7 @@
       "difficulty": "easy",
       "source_level": "Class 1",
       "class_level": 2,
-      "reasoning": "Counts and writes 1-2 digit numbers.",
+      "reasoning": "Adds a single digit to a two-digit number without carry.",
       "bbox": {"x": 120, "y": 740, "width": 200, "height": 60},
       "page": 1
     },
