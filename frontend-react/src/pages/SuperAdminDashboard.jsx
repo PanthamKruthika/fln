@@ -1,6 +1,8 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import AppLayout from "../layouts/AppLayout";
 import SummaryCards from "../components/SummaryCards";
+import { Sparkles } from "lucide-react";
 import { roles, roleNav } from "../data/roles";
 import {
   Megaphone,
@@ -48,6 +50,23 @@ export default function SuperAdminDashboard() {
       onSelect={setActiveId}
     >
       <SummaryCards cards={summaryCards} />
+
+      {/* Quick action: jump to AI Assessment Template Builder */}
+      <section className="bg-gradient-to-r from-indigo-600 to-violet-600 rounded-xl p-5 text-white shadow-sm flex items-center justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-wider text-indigo-100 mb-1">AI-Assisted Workflow</div>
+          <h2 className="text-lg font-semibold">Upload a question paper · AI extracts the answer-key</h2>
+          <p className="text-sm text-indigo-100 mt-0.5">
+            Super Admin → Assessments → Generate Template → review & approve.
+          </p>
+        </div>
+        <Link
+          to="/superadmin/assessments"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-white text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-50"
+        >
+          <Sparkles size={14} /> Open Assessments
+        </Link>
+      </section>
 
       <section className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="flex items-center justify-between mb-4">

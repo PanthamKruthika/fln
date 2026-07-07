@@ -6,6 +6,7 @@ export { default as User }               from "./User.js";
 export { default as Class }              from "./Class.js";
 export { default as Student }            from "./Student.js";
 export { default as Assessment }         from "./Assessment.js";
+export { default as AssessmentTemplate } from "./AssessmentTemplate.js";
 export { default as Worksheet }           from "./Worksheet.js";
 export { default as WorksheetAssignment } from "./WorksheetAssignment.js";
 export { default as StudentSubmission }   from "./StudentSubmission.js";

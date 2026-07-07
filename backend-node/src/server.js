@@ -6,6 +6,7 @@ import morgan from "morgan";
 import { connectDB } from "./config/db.js";
 import authRoutes from "./routes/authRoutes.js";
 import systemRoutes from "./routes/systemRoutes.js";
+import assessmentRoutes from "./routes/assessmentRoutes.js";
 
 const app = express();
 
@@ -31,6 +32,7 @@ app.get("/", (req, res) => {
 
 app.use("/api", systemRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/assessments", assessmentRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err);

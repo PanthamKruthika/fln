@@ -2,6 +2,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import SuperAdminDashboard from "./pages/SuperAdminDashboard";
+import SuperAdminAssessments from "./pages/superadmin/SuperAdminAssessments";
+import AssessmentTemplateBuilder from "./pages/superadmin/AssessmentTemplateBuilder";
 import AdminDashboard from "./pages/AdminDashboard";
 import DistrictAdminDashboard from "./pages/DistrictAdminDashboard";
 import BlockAdminDashboard from "./pages/BlockAdminDashboard";
@@ -33,6 +35,8 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
 
           <Route path="/superadmin" element={<RequireAuth><SuperAdminDashboard /></RequireAuth>} />
+          <Route path="/superadmin/assessments" element={<RequireAuth><SuperAdminAssessments /></RequireAuth>} />
+          <Route path="/superadmin/assessments/:assessmentId/template" element={<RequireAuth><AssessmentTemplateBuilder /></RequireAuth>} />
           <Route path="/admin" element={<RequireAuth><AdminDashboard /></RequireAuth>} />
           <Route path="/district" element={<RequireAuth><DistrictAdminDashboard /></RequireAuth>} />
           <Route path="/block" element={<RequireAuth><BlockAdminDashboard /></RequireAuth>} />
