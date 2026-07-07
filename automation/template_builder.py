@@ -43,6 +43,11 @@ app = FastAPI(
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip()
 
+# Second provider — Hugging Face Inference API (free tier).
+# Sign up at https://huggingface.co/settings/tokens (free, no card).
+HF_API_KEY = os.environ.get("HF_API_KEY", "").strip()
+HF_MODEL   = os.environ.get("HF_MODEL", "Qwen/Qwen2-VL-7B-Instruct").strip()
+
 
 # --------------------------------------------------------------------------- #
 # Stage 1 — render PDF pages as PNG images (PyMuPDF)
@@ -121,6 +126,79 @@ Rules:
 - If the page has no questions, return {{"questions": []}}.
 """
 
+
+# --------------------------------------------------------------------------- #
+# Stage 2b — Hugging Face Inference API (vision LLM)
+# --------------------------------------------------------------------------- #
+
+def call_hf_on_pages(page_images: list[bytes], grade: int, subject: str) -> list[dict]:
+    """Vision-capable LLM via the free Hugging Face Inference API.
+
+    Requires HF_API_KEY in env (free token from
+    https://huggingface.co/settings/tokens). Used as a fallback when
+    Google Gemini is not configured.
+    """
+    if not HF_API_KEY or not page_images:
+        return []
+    try:
+        import requests
+    except Exception:
+        print("[template_builder] requests not installed")
+        return []
+
+    headers = {
+        "Authorization": f"Bearer {HF_API_KEY}",
+        "Content-Type":  "application/json",
+    }
+    url = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+    extracted: list[dict] = []
+    for idx, img in enumerate(page_images):
+        b64 = base64.b64encode(img).decode("ascii")
+        body = {
+            "inputs": {
+                "image": f"data:image/png;base64,{b64}",
+                "question": GEMINI_PROMPT.format(grade=grade, subject=subject),
+            },
+            "parameters": {"max_new_tokens": 1024, "temperature": 0.0},
+        }
+        try:
+            resp = requests.post(url, headers=headers, json=body, timeout=60)
+        except Exception as e:
+            print(f"[template_builder] HF call failed (page {idx}): {e}")
+            continue
+        if resp.status_code != 200:
+            print(f"[template_builder] HF HTTP {resp.status_code}: {resp.text[:200]}")
+            continue
+        data = resp.json()
+        # Some HF models return a list of {generated_text: "..."}
+        text = ""
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            text = data[0].get("generated_text", "")
+        elif isinstance(data, dict):
+            text = data.get("generated_text", "") or data.get("answer", "")
+        # Strip code fences
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+            text = re.sub(r"\s*```\s*$", "", text)
+        try:
+            page_data = json.loads(text)
+            qs = page_data.get("questions", []) if isinstance(page_data, dict) else []
+            if isinstance(qs, list):
+                # Re-number per page
+                for j, q in enumerate(qs):
+                    q["questionNo"] = len(extracted) + j + 1
+                    extracted.append(q)
+        except Exception:
+            # Sometimes HF returns prose; skip silently
+            pass
+
+    return extracted
+
+
+# --------------------------------------------------------------------------- #
+# Stage 2 — Gemini vision call
+# --------------------------------------------------------------------------- #
 
 def call_gemini_on_pages(page_images: list[bytes], grade: int, subject: str) -> list[dict]:
     """Send all pages to Gemini as inline images; return merged
@@ -336,13 +414,20 @@ def _build_response(
     raw_questions: list[dict] = []
     source = ""
 
-    # 2. Prefer Gemini vision if API key + pages are available
+    # 2. Try vision LLMs in order: Gemini → Hugging Face → none
     if GEMINI_API_KEY and page_images:
         raw_questions = call_gemini_on_pages(page_images, grade, subject)
         if raw_questions:
             source = f"gemini ({GEMINI_MODEL})"
             notes_parts.append(
                 f"Questions extracted by Google Gemini ({GEMINI_MODEL}) vision model."
+            )
+    if not raw_questions and HF_API_KEY and page_images:
+        raw_questions = call_hf_on_pages(page_images, grade, subject)
+        if raw_questions:
+            source = f"hf ({HF_MODEL})"
+            notes_parts.append(
+                f"Questions extracted by Hugging Face vision model ({HF_MODEL})."
             )
 
     # 3. Fallback — PyMuPDF text + heuristic parsing
@@ -368,21 +453,23 @@ def _build_response(
     # 4. If we still have nothing, build a very specific, actionable
     #    error message so the admin knows what to fix.
     if not raw_questions:
-        if not text and not GEMINI_API_KEY:
+        if not text and not GEMINI_API_KEY and not HF_API_KEY:
             notes_parts.append(
                 "PDF appears to be image-based (no extractable text). "
-                "Set GEMINI_API_KEY in backend-node/.env to enable Gemini vision OCR. "
-                "Get a free key at https://aistudio.google.com/app/apikey"
+                "Set GEMINI_API_KEY in backend-node/.env to enable Gemini vision OCR "
+                "(free key at https://aistudio.google.com/app/apikey), "
+                "or HF_API_KEY for Hugging Face Inference "
+                "(free token at https://huggingface.co/settings/tokens)."
             )
         elif not text and GEMINI_API_KEY and not page_images:
             notes_parts.append(
                 f"PyMuPDF could not rasterize the PDF ({render_error or 'unknown error'}). "
                 "Re-export the PDF or upload a different one."
             )
-        elif not text and GEMINI_API_KEY:
+        elif not text and (GEMINI_API_KEY or HF_API_KEY):
             notes_parts.append(
-                "PDF text could not be extracted AND Gemini returned no questions. "
-                "Try a clearer scan or a text-based PDF."
+                "PDF text could not be extracted AND the configured vision model "
+                "returned no questions. Try a clearer scan or a text-based PDF."
             )
 
     # 5. Enrich + renumber consecutively
@@ -406,6 +493,8 @@ def health() -> dict:
         "ok": True,
         "service": "fln-template-builder",
         "version": app.version,
-        "gemini_configured": bool(GEMINI_API_KEY),
-        "gemini_model": GEMINI_MODEL,
+        "providers": {
+            "gemini": {"configured": bool(GEMINI_API_KEY), "model": GEMINI_MODEL},
+            "hf":     {"configured": bool(HF_API_KEY),    "model": HF_MODEL},
+        },
     }
