@@ -4,7 +4,7 @@ const User = require("../models/User");
 const { ROLES } = require("../models/enums");
 
 async function run() {
-  await mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/fln");
+  await mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/fln_answerkey");
   console.log("MongoDB connected");
 
   const email = "superadmin@fln.org";

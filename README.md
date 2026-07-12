@@ -10,6 +10,10 @@ backend/    ← Express + MongoDB API       (port 5000)
 SRS.md      ← Upstream Software Requirements
 ```
 
+## Database
+
+This branch uses an isolated MongoDB database: **`fln_answerkey`** (different from the old branch's `fln` DB).
+
 ## Prerequisites
 
 - Node 18+ and npm
