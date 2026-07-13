@@ -27,8 +27,8 @@ const NAV = [
   { label: "Students", to: "/students", icon: GraduationCap },
   { label: "Assessments", to: "/assessments", icon: ClipboardCheck },
   {
-    label: "AI Assessment Template",
-    to: "/assessment-template-generator",
+    label: "AI Answer Key Generator",
+    to: "/answer-key-generator",
     icon: Wand,
   },
   { label: "Reports & Analytics", to: "/reports", icon: BarChart3 },

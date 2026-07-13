@@ -9,8 +9,8 @@ import SchoolsPage from "./pages/Schools/SchoolsPage";
 import TeachersPage from "./pages/Teachers/TeachersPage";
 import StudentsPage from "./pages/Students/StudentsPage";
 import AssessmentsPage from "./pages/Assessments/AssessmentsPage";
-import AssessmentsListPage from "./pages/AssessmentTemplateGenerator/AssessmentsListPage";
-import TemplateReviewPage from "./pages/AssessmentTemplateGenerator/TemplateReviewPage";
+import AssessmentsListPage from "./pages/AnswerKeyGenerator/AssessmentsListPage";
+import TemplateReviewPage from "./pages/AnswerKeyGenerator/TemplateReviewPage";
 import ReportsPage from "./pages/Reports/ReportsPage";
 import UsersPage from "./pages/Users/UsersPage";
 import AuditLogsPage from "./pages/AuditLogs/AuditLogsPage";
@@ -37,8 +37,8 @@ export default function App() {
         <Route path="teachers" element={<TeachersPage />} />
         <Route path="students" element={<StudentsPage />} />
         <Route path="assessments" element={<AssessmentsPage />} />
-        <Route path="assessment-template-generator" element={<AssessmentsListPage />} />
-        <Route path="assessment-template-generator/:id/review" element={<TemplateReviewPage />} />
+        <Route path="answer-key-generator" element={<AssessmentsListPage />} />
+        <Route path="answer-key-generator/:id/review" element={<TemplateReviewPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="audit-logs" element={<AuditLogsPage />} />

@@ -57,7 +57,7 @@ export default function AssessmentsListPage() {
     onSuccess: (data) => {
       toast.success("Uploaded & extracted — review the questions");
       setShowCreate(false);
-      navigate(`/assessment-template-generator/${data.assessmentId}/review`, {
+      navigate(`/answer-key-generator/${data.assessmentId}/review`, {
         state: { template: data.preview, model: data.model },
       });
     },
@@ -73,13 +73,13 @@ export default function AssessmentsListPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-slate-900">AI Assessment Template Generator</h1>
+          <h1 className="text-xl font-semibold text-slate-900">AI Answer Key Generator</h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Upload a question paper PDF → AI extracts questions → review &amp; approve the template.
           </p>
         </div>
         <Button onClick={() => setShowCreate(true)}>
-          <Wand2 className="w-4 h-4" /> New Assessment
+          <Wand2 className="w-4 h-4" /> New Answer Key
         </Button>
       </div>
 
@@ -94,7 +94,7 @@ export default function AssessmentsListPage() {
                 <div
                   key={a._id}
                   className="flex items-center gap-4 px-5 py-3 hover:bg-slate-50 transition cursor-pointer"
-                  onClick={() => navigate(`/assessment-template-generator/${a._id}/review`)}
+                  onClick={() => navigate(`/answer-key-generator/${a._id}/review`)}
                 >
                   <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 grid place-items-center flex-shrink-0">
                     {a.templateStatus === "Approved" ? <FileCheck2 className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
@@ -133,10 +133,10 @@ export default function AssessmentsListPage() {
             <div className="w-16 h-16 mx-auto rounded-2xl bg-blue-50 text-blue-600 grid place-items-center mb-4">
               <Sparkles className="w-8 h-8" />
             </div>
-            <h2 className="text-lg font-semibold text-slate-900">Start a new assessment template</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Generate a new answer key</h2>
             <p className="text-sm text-slate-500 mt-1.5 max-w-md mx-auto">
               Enter class details, choose a paper type, and upload your question paper PDF. The AI
-              will extract every question for you to review and approve.
+              will extract every question + generate the answer key for you to review and approve.
             </p>
 
             <button
@@ -144,7 +144,7 @@ export default function AssessmentsListPage() {
               className="mt-6 inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-blue-600 text-white text-sm font-semibold shadow-sm hover:bg-blue-700 transition"
             >
               <Wand2 className="w-4 h-4" />
-              Create Assessment + Template
+              Generate Answer Key
             </button>
 
             <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-3 max-w-2xl mx-auto">
@@ -347,7 +347,7 @@ function CreateAssessmentModal({
             </Button>
             <Button type="submit" loading={busy}>
               <Wand2 className="w-4 h-4" />
-              Generate Template
+              Generate Answer Key
             </Button>
           </div>
         </form>

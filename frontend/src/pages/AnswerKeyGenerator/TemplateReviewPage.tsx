@@ -75,7 +75,7 @@ export default function TemplateReviewPage() {
     mutationFn: () => assessmentApi.approveTemplate(id!),
     onSuccess: () => {
       toast.success("Template approved!");
-      navigate("/assessment-template-generator");
+      navigate("/answer-key-generator");
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -289,7 +289,7 @@ export default function TemplateReviewPage() {
 
       {/* Action Buttons */}
       <div className="flex items-center justify-between">
-        <Button variant="secondary" onClick={() => navigate("/assessment-template-generator")}>
+        <Button variant="secondary" onClick={() => navigate("/answer-key-generator")}>
           <ChevronLeft className="w-4 h-4" /> Back
         </Button>
         <div className="flex items-center gap-2">

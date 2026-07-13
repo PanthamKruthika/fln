@@ -9,7 +9,7 @@ const BREADCRUMBS: Record<string, string> = {
   teachers: "Teachers",
   students: "Students",
   assessments: "Assessments",
-  "assessment-template-generator": "AI Assessment Template Generator",
+  "answer-key-generator": "AI Answer Key Generator",
   reports: "Reports & Analytics",
   users: "User Management",
   "audit-logs": "Audit Logs",
