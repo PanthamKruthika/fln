@@ -92,8 +92,7 @@ export default function AssessmentsListPage() {
               return (
                 <div
                   key={a._id}
-                  className="flex items-center gap-4 px-5 py-3 hover:bg-slate-50 transition cursor-pointer"
-                  onClick={() => navigate(`/answer-key-generator/${a._id}/review`)}
+                  className="flex items-center gap-4 px-5 py-3 hover:bg-slate-50 transition"
                 >
                   <div className="px-3 py-2 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 text-white font-mono font-bold text-sm flex-shrink-0">
                     {a.assessmentCode || "AS????"}
@@ -113,11 +112,16 @@ export default function AssessmentsListPage() {
                   <div className="flex items-center gap-3 flex-shrink-0">
                     <StatusChip status={a.templateStatus} />
                     {tpl && (
-                      <span className="text-xs text-slate-600">
+                      <span className="text-xs text-slate-600 hidden sm:inline">
                         {tpl.totalQuestions ?? 0}Q · {tpl.totalMarks ?? 0}M
                       </span>
                     )}
-                    <ChevronRight className="w-4 h-4 text-slate-400" />
+                    <Button
+                      size="sm"
+                      onClick={() => navigate(`/answer-key-generator/${a._id}/review`)}
+                    >
+                      <Edit className="w-3 h-3" /> Edit
+                    </Button>
                   </div>
                 </div>
               );

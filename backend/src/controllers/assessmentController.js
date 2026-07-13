@@ -185,16 +185,17 @@ async function generateTemplate(req, res) {
       } else {
         template = await AnswerKey.create({
           assessmentId: id,
-          questions: result.questions || [],
-          status: "Draft",
-          generatedBy: "ai",
-          modelName: result.model || "unknown",
-          version: existing ? existing.version + 1 : 1,
-        });
-      }
-      assessment.templateId = template._id;
-      assessment.templateStatus = "Draft";
-      await assessment.save();
+questions: result.questions || [],
+           status: "Draft",
+           generatedBy: "ai",
+           modelName: result.model || "unknown",
+           assessmentCode: assessment.assessmentCode,  // mirror code into answerkey
+           version: existing ? existing.version + 1 : 1,
+         });
+       }
+       assessment.templateId = template._id;
+       assessment.templateStatus = "Draft";
+       await assessment.save();
     } catch (saveErr) {
       console.error("Auto-save template failed (non-fatal):", saveErr.message);
     }

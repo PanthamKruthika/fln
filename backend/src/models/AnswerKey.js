@@ -52,6 +52,7 @@ const answerKeySchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    assessmentCode: { type: String, trim: true, index: true },
     version: { type: Number, default: 1 },
     status: {
       type: String,

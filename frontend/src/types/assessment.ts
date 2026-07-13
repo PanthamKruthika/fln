@@ -42,6 +42,7 @@ export interface Question {
 export interface AssessmentTemplate {
   _id: string;
   assessmentId: string;
+  assessmentCode?: string;
   version: number;
   status: "Draft" | "Approved" | "Archived";
   generatedBy: string;

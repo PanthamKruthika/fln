@@ -58,11 +58,15 @@ async function saveTemplate(req, res) {
     if (!Array.isArray(questions)) {
       return res.status(400).json({ message: "questions[] required" });
     }
+    // Lookup parent assessment to copy assessmentCode into the answerkey
+    const parent = await Assessment.findById(assessmentId).select("assessmentCode");
+    const code = parent?.assessmentCode || null;
     const existing = await AnswerKey.findOne({ assessmentId }).sort({ version: -1 });
     let template;
     if (existing && existing.status !== "Approved") {
       existing.questions = questions;
       if (status === "Draft") existing.status = "Draft";
+      if (code && !existing.assessmentCode) existing.assessmentCode = code;
       template = await existing.save();
     } else {
       template = await AnswerKey.create({
@@ -71,6 +75,7 @@ async function saveTemplate(req, res) {
         status: "Draft",
         generatedBy: req.body.generatedBy || "ai",
         modelName: req.body.modelName || "unknown",
+        assessmentCode: code,
         version: existing ? existing.version + 1 : 1,
       });
     }
