@@ -5,7 +5,7 @@ import { toast } from "react-hot-toast";
 import {
   Wand2, CheckCircle2, Save, RotateCcw, ChevronLeft,
   Edit3, Check, X, BookOpen, Trophy, Clock, Plus, Trash2,
-  KeyRound, AlertCircle,
+  KeyRound, AlertCircle, ImageIcon,
 } from "lucide-react";
 import Button from "../../components/ui/Button";
 import Badge from "../../components/ui/Badge";
@@ -376,6 +376,26 @@ function QuestionCard({
             />
           </div>
 
+          {(q.images?.length ?? 0) > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {q.images!.map((img, i) => (
+                <img
+                  key={i}
+                  src={img.imageUrl}
+                  alt=""
+                  className="w-full h-28 object-contain bg-slate-50 rounded-lg border border-slate-200"
+                />
+              ))}
+            </div>
+          )}
+
+          <Input
+            label="Visual description (if question references an image)"
+            value={q.visualDescription || ""}
+            onChange={(e) => onUpdate({ visualDescription: e.target.value })}
+            placeholder="e.g. Picture of 5 stars to count"
+          />
+
           <div className="grid grid-cols-4 gap-2">
             <Select
               label="Type"
@@ -469,6 +489,47 @@ function QuestionCard({
       ) : (
         <div>
           <p className="text-sm font-medium text-slate-900">{q.questionText || "—"}</p>
+
+          {/* Images from PDF page */}
+          {(q.images?.length ?? 0) > 0 && (
+            <div className="mt-3">
+              <div className="flex items-center gap-1.5 mb-2">
+                <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">
+                  Attached Images ({q.images!.length})
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {q.images!.map((img, i) => (
+                  <a
+                    key={i}
+                    href={img.imageUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block bg-slate-50 rounded-lg border border-slate-200 overflow-hidden hover:border-blue-400 transition group"
+                  >
+                    <img
+                      src={img.imageUrl}
+                      alt={`Question ${q.questionNo} image ${i + 1}`}
+                      className="w-full h-32 object-contain bg-white group-hover:scale-105 transition"
+                    />
+                    <p className="text-[10px] text-slate-500 p-1.5 text-center truncate">
+                      {q.visualDescription || `Image ${i + 1}`}
+                    </p>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {q.visualDescription && (q.images?.length ?? 0) === 0 && (
+            <div className="mt-2 flex items-start gap-2 p-2 bg-blue-50 border border-blue-100 rounded-lg">
+              <ImageIcon className="w-3.5 h-3.5 text-blue-600 mt-0.5 flex-shrink-0" />
+              <div className="text-xs text-blue-900">
+                <span className="font-semibold">Image expected:</span> {q.visualDescription}
+              </div>
+            </div>
+          )}
 
           {/* Answer Key display */}
           <div

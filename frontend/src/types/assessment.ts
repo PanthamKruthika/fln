@@ -31,6 +31,8 @@ export interface Question {
   correctAnswer: string;
   alternateAnswers: string[];
   evaluationRule: string;
+  visualDescription?: string;
+  hasImage?: boolean;
   boundingBox: BoundingBox;
   images: QuestionImage[];
 }

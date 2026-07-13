@@ -24,6 +24,19 @@ app.use(morgan("dev"));
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 app.use("/uploads", express.static(UPLOAD_DIR));
 
+// Proxy /extracted-images/* to Python service (so frontend can load via backend :5000)
+app.use("/extracted-images", async (req, res, next) => {
+  try {
+    const axios = require("axios");
+    const pyUrl = `${process.env.PYTHON_SERVICE_URL || "http://127.0.0.1:5051"}${req.originalUrl}`;
+    const r = await axios.get(pyUrl, { responseType: "stream", timeout: 30000 });
+    res.set("content-type", r.headers["content-type"]);
+    r.data.pipe(res);
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.get("/api/health", (req, res) =>
   res.json({ ok: true, service: "fln-backend", time: new Date().toISOString() })
 );
