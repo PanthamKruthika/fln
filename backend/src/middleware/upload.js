@@ -1,10 +1,17 @@
 const multer = require("multer");
 const path = require("path");
-const os = require("os");
-const { safeFilename } = require("../services/pdfParser");
+const fs = require("fs");
+const { safeFilename, UPLOAD_DIR } = require("../services/pdfParser");
 
+// Ensure upload dir exists
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+
+// Write directly to UPLOAD_DIR so the same filename is used by both
+// multer (when storing the file) and our controller (when building URLs).
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, os.tmpdir()),
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => cb(null, safeFilename(file.originalname)),
 });
 

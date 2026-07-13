@@ -3,7 +3,7 @@ const fs = require("fs");
 const Assessment = require("../models/Assessment");
 const AssessmentTemplate = require("../models/AssessmentTemplate");
 const pythonClient = require("../services/pythonClient");
-const { safeFilename, UPLOAD_DIR, extractTextFromPdf } = require("../services/pdfParser");
+const { UPLOAD_DIR } = require("../services/pdfParser");
 const auditLog = require("../services/audit");
 
 function owner(req) {
@@ -34,25 +34,16 @@ async function createAssessment(req, res) {
 
     if (files.length === 1) {
       // Backwards-compatible single-file fields
-      const filename = safeFilename(files[0].originalname);
-      const dest = path.join(UPLOAD_DIR, filename);
-      fs.renameSync(files[0].path, dest);
-      assessment.questionPaperUrl = `/uploads/${filename}`;
-      assessment.questionPaperFileName = files[0].originalname;
-      assessment.questionPaperSize = files[0].size;
+      const f = files[0];
+      const urlPath = `/uploads/${f.filename}`;
+      assessment.questionPaperUrl = urlPath;
+      assessment.questionPaperFileName = f.originalname;
+      assessment.questionPaperSize = f.size;
     }
     if (files.length > 0) {
-      const urls = [];
-      const names = [];
-      const sizes = [];
-      for (const f of files) {
-        const filename = safeFilename(f.originalname);
-        const dest = path.join(UPLOAD_DIR, filename);
-        try { fs.renameSync(f.path, dest); } catch (_) { fs.copyFileSync(f.path, dest); }
-        urls.push(`/uploads/${filename}`);
-        names.push(f.originalname);
-        sizes.push(f.size);
-      }
+      const urls = files.map((f) => `/uploads/${f.filename}`);
+      const names = files.map((f) => f.originalname);
+      const sizes = files.map((f) => f.size);
       assessment.questionPaperUrls = urls;
       assessment.questionPaperFileNames = names;
       assessment.questionPaperSizes = sizes;
