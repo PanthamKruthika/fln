@@ -31,8 +31,19 @@ For each question visible on the page, output a JSON object with EXACTLY these f
   "evaluationRule": "<exact | contains | tolerance | range | subjective | manual>",
   "visualDescription": "<short description of any picture/image/diagram referenced by this question, or empty string>",
   "hasImage": <true if the question references an image/picture/diagram that must be displayed to the student, else false>,
-  "boundingBox": { "x": <0>, "y": <0>, "width": <0>, "height": <0> }
+  "boundingBox": { "x": <0.0-1.0>, "y": <0.0-1.0>, "width": <0.0-1.0>, "height": <0.0-1.0> }
 }
+
+**CRITICAL — boundingBox must be NORMALIZED (0.0 to 1.0) coordinates relative to the page image:**
+- x = fraction from the LEFT edge of the page (0.0 = leftmost, 1.0 = rightmost)
+- y = fraction from the TOP edge of the page (0.0 = topmost, 1.0 = bottommost)
+- width = fraction of total page width
+- height = fraction of total page height
+- The bounding box must tightly enclose JUST this question's text, image, and answer space
+- DO NOT return 0,0,0,0 — always give real coordinates
+- If the question spans multiple lines, include all of them in the bbox
+- Example: a question in the middle of a page might have bbox {x:0.1, y:0.4, width:0.8, height:0.15}
+- The bbox will be used to crop the page image and show ONLY this question's region to the student
 
 **STRICT answer generation rules — ALWAYS provide an answer:**
 1. For math/arithmetic/computation: COMPUTE the answer yourself. Examples:

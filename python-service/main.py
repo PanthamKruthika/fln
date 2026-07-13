@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 
-from services.pdf_processor import pdf_to_images_and_pictures, render_single_image
+from services.pdf_processor import pdf_to_images_and_pictures, render_single_image, crop_page_to_bbox
 import services.groq_service as groq_svc
 import services.gemini_service as gemini_svc
 from services.question_parser import parse_pages, SUBJECTIVE_TYPES
@@ -103,15 +103,17 @@ MOCK_QUESTIONS = [
 
 
 def _collect_pages_and_images(file_paths: List[str]) -> tuple:
-    """Render every file as JPEG pages + extract embedded images per page.
+    """Render every file as JPEG pages + extract embedded images per page + save full pages for cropping.
 
     Returns:
         pages: List of (page_idx, source_file_idx, jpeg_bytes)
         pictures_by_page: Dict[page_idx, List[image_paths]]
+        saved_page_paths: Dict[page_idx, saved_path_to_full_page_jpeg]   ← for cropping per-question
         images_by_source: Dict[source_file_name, List[image_urls]]   ← for per-question image attachment
     """
     pages = []
     pictures_by_page = {}
+    saved_page_paths = {}
     images_by_source = {}
 
     for src_idx, fp in enumerate(file_paths, start=1):
@@ -130,13 +132,15 @@ def _collect_pages_and_images(file_paths: List[str]) -> tuple:
                 with open(out_path, "wb") as f:
                     f.write(img_bytes)
                 images_by_source[src_name] = [f"{backend_url()}/extracted-images/{fname}"]
+                # Also save as "full page" so it can be cropped if AI returns bbox
+                saved_page_paths[page_idx] = out_path
             except Exception as e:
                 logger.warning(f"Could not render image {fp}: {e}")
             continue
 
         # PDF path
         try:
-            pdf_pages, pdf_pics = pdf_to_images_and_pictures(fp, IMAGES_DIR)
+            pdf_pages, pdf_pics, pdf_page_paths = pdf_to_images_and_pictures(fp, IMAGES_DIR, save_page_images=True)
             for local_idx, jpeg in enumerate(pdf_pages, start=1):
                 page_idx = len(pages) + 1
                 pages.append((page_idx, src_idx, jpeg))
@@ -149,10 +153,13 @@ def _collect_pages_and_images(file_paths: List[str]) -> tuple:
                     urls = [f"{backend_url()}/extracted-images/{os.path.basename(p)}" for p in pics]
                     pictures_by_page[page_idx_key] = urls
                     images_by_source[f"{src_name}#p{local_idx}"] = urls
+                # Map global page → saved page path (for cropping)
+                if local_idx in pdf_page_paths:
+                    saved_page_paths[page_idx_key] = pdf_page_paths[local_idx]
         except Exception as e:
             logger.warning(f"Could not process PDF {fp}: {e}")
 
-    return pages, pictures_by_page, images_by_source
+    return pages, pictures_by_page, saved_page_paths, images_by_source
 
 
 @app.get("/health")
@@ -256,7 +263,7 @@ def generate_template(req: GenerateTemplateRequest):
         return _mock_response(req.assessmentId)
 
     try:
-        pages, pictures_by_page, images_by_source = _collect_pages_and_images(file_paths)
+        pages, pictures_by_page, saved_page_paths, images_by_source = _collect_pages_and_images(file_paths)
         if not pages:
             logger.warning("No pages extracted — falling back to mock")
             return _mock_with_label(req.assessmentId, "mock (no-pages)")
@@ -283,7 +290,7 @@ def generate_template(req: GenerateTemplateRequest):
             return _mock_with_label(req.assessmentId, f"mock ({provider_name}-empty)")
 
         deduped = parse_pages(all_results)
-        deduped = _attach_images_to_questions(deduped, pictures_by_page, images_by_source, is_image_mode)
+        deduped = _attach_images_to_questions(deduped, pictures_by_page, images_by_source, is_image_mode, saved_page_paths)
         total_marks = sum(q.get("marks", 1) for q in deduped)
 
         # Post-process: only mark visual questions as manual if AI completely failed
@@ -313,23 +320,44 @@ def generate_template(req: GenerateTemplateRequest):
         return _mock_with_label(req.assessmentId, "mock (error)")
 
 
-def _attach_images_to_questions(questions, pictures_by_page, images_by_source, is_image_mode):
+def _attach_images_to_questions(questions, pictures_by_page, images_by_source, is_image_mode, saved_page_paths=None):
     """Attach per-question images.
 
     - In image-mode: each image file = 1 page = all questions from that page get that image
     - In PDF-mode: pictures_by_page is keyed by page number
+    - If bbox is valid: crop the page image to just that question's region
     """
+    saved_page_paths = saved_page_paths or {}
+    cropped_count = 0
+
     for q in questions:
         page = q.get("pageNumber", 1)
         source_idx = q.get("sourceFileIndex") or page
-
-        # Try to find images for this question
         urls = []
+        crop_path = None
 
-        if is_image_mode:
-            # Each page in image-mode has exactly one rendered image
-            # Map page number (1-based) to its extracted image
-            # images_by_source is keyed by original filename; we collected pages in order
+        # Try to crop the page image to just this question (PDF mode only)
+        bbox = q.get("boundingBox") or {}
+        bbox_valid = (
+            isinstance(bbox, dict)
+            and 0 <= float(bbox.get("x", 0)) <= 1
+            and 0 <= float(bbox.get("y", 0)) <= 1
+            and 0 < float(bbox.get("width", 0)) <= 1
+            and 0 < float(bbox.get("height", 0)) <= 1
+        )
+        if bbox_valid and page in saved_page_paths:
+            crop_fname = f"crop-{os.path.basename(saved_page_paths[page]).replace('.jpg', '')}-q{q.get('questionNo', 'x')}.jpg"
+            crop_full_path = os.path.join(IMAGES_DIR, crop_fname)
+            cropped_bytes = crop_page_to_bbox(saved_page_paths[page], bbox, output_path=crop_full_path)
+            if cropped_bytes and os.path.exists(crop_full_path):
+                crop_path = crop_full_path
+                cropped_count += 1
+                logger.info(f"Cropped Q{q.get('questionNo', '?')} from page {page}: bbox=({bbox.get('x'):.2f},{bbox.get('y'):.2f},{bbox.get('width'):.2f},{bbox.get('height'):.2f})")
+
+        # Build the image URL list for this question
+        if crop_path:
+            urls.append(f"{backend_url()}/extracted-images/{os.path.basename(crop_path)}")
+        elif is_image_mode:
             all_keys = list(images_by_source.keys())
             page_to_url = {}
             for idx, key in enumerate(all_keys, start=1):
@@ -344,6 +372,11 @@ def _attach_images_to_questions(questions, pictures_by_page, images_by_source, i
             urls = pictures_by_page.get(page, [])
 
         q["images"] = [{"imageUrl": u, "position": "inline"} for u in urls[:4]]
+        if crop_path:
+            q["croppedFromPage"] = page
+
+    if cropped_count > 0:
+        logger.info(f"✂️  Cropped {cropped_count}/{len(questions)} questions from their pages")
     return questions
 
 

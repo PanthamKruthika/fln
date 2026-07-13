@@ -30,8 +30,10 @@ For each question visible on the page, output a JSON object with EXACTLY these f
   "evaluationRule": "<exact | contains | tolerance | range | subjective | manual>",
   "visualDescription": "<short description of any picture/image/diagram referenced by this question, or empty string>",
   "hasImage": <true if the question references an image/picture/diagram that must be displayed to the student, else false>,
-  "boundingBox": { "x": <0>, "y": <0>, "width": <0>, "height": <0> }
+  "boundingBox": { "x": <0.0-1.0>, "y": <0.0-1.0>, "width": <0.0-1.0>, "height": <0.0-1.0> }
 }
+
+**CRITICAL — boundingBox must be NORMALIZED (0.0-1.0) coords relative to the page image.** Tightly enclose just this question. Never return 0,0,0,0.
 
 **STRICT answer generation rules — ALWAYS provide an answer:**
 1. For math/arithmetic/computation: COMPUTE the answer yourself.

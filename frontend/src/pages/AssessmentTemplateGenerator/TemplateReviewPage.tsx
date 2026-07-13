@@ -519,13 +519,18 @@ function QuestionCard({
           {/* Images from PDF page */}
           {(q.images?.length ?? 0) > 0 && (
             <div className="mt-3">
-              <div className="flex items-center gap-1.5 mb-2">
+              <div className="flex items-center gap-2 mb-2">
                 <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">
-                  Attached Images ({q.images!.length})
+                  Question Image{q.images!.length > 1 ? "s" : ""} ({q.images!.length})
                 </span>
+                {(q as any).croppedFromPage && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-medium border border-emerald-200">
+                    ✂️ Cropped from PDF page {(q as any).croppedFromPage}
+                  </span>
+                )}
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {q.images!.map((img, i) => (
                   <a
                     key={i}
@@ -537,7 +542,7 @@ function QuestionCard({
                     <img
                       src={img.imageUrl}
                       alt={`Question ${q.questionNo} image ${i + 1}`}
-                      className="w-full h-32 object-contain bg-white group-hover:scale-105 transition"
+                      className="w-full h-40 object-contain bg-white group-hover:scale-105 transition"
                     />
                     <p className="text-[10px] text-slate-500 p-1.5 text-center truncate">
                       {q.visualDescription || `Image ${i + 1}`}

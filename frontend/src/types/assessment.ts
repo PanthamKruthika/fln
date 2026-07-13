@@ -34,6 +34,8 @@ export interface Question {
   visualDescription?: string;
   hasImage?: boolean;
   boundingBox: BoundingBox;
+  sourceFileIndex?: number | null;
+  croppedFromPage?: number;
   images: QuestionImage[];
 }
 
