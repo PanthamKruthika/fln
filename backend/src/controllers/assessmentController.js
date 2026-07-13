@@ -1,7 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 const Assessment = require("../models/Assessment");
-const AssessmentTemplate = require("../models/AssessmentTemplate");
+const AnswerKey = require("../models/AnswerKey");
 const pythonClient = require("../services/pythonClient");
 const { UPLOAD_DIR } = require("../services/pdfParser");
 const auditLog = require("../services/audit");
@@ -100,7 +100,7 @@ async function deleteAssessment(req, res) {
       if (fs.existsSync(fp)) fs.unlinkSync(fp);
     }
     if (assessment.templateId) {
-      await AssessmentTemplate.findByIdAndDelete(assessment.templateId);
+      await AnswerKey.findByIdAndDelete(assessment.templateId);
     }
     await Assessment.findByIdAndDelete(id);
     return res.json({ ok: true });
@@ -156,14 +156,14 @@ async function generateTemplate(req, res) {
 
     // Auto-save as Draft so regenerate-question has a template to work with
     try {
-      const existing = await AssessmentTemplate.findOne({ assessmentId: id }).sort({ version: -1 });
+      const existing = await AnswerKey.findOne({ assessmentId: id }).sort({ version: -1 });
       let template;
       if (existing && existing.status !== "Approved") {
         existing.questions = result.questions || [];
         existing.modelName = result.model || "unknown";
         template = await existing.save();
       } else {
-        template = await AssessmentTemplate.create({
+        template = await AnswerKey.create({
           assessmentId: id,
           questions: result.questions || [],
           status: "Draft",

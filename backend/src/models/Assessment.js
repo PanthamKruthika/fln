@@ -47,7 +47,7 @@ const assessmentSchema = new mongoose.Schema(
     },
     templateId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "AssessmentTemplate",
+      ref: "AnswerKey",
       default: null,
     },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

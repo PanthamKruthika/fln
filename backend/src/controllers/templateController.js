@@ -1,5 +1,5 @@
 const Assessment = require("../models/Assessment");
-const AssessmentTemplate = require("../models/AssessmentTemplate");
+const AnswerKey = require("../models/AnswerKey");
 const pythonClient = require("../services/pythonClient");
 const { UPLOAD_DIR } = require("../services/pdfParser");
 
@@ -41,7 +41,7 @@ async function generateOnly(req, res) {
 async function getTemplate(req, res) {
   try {
     const { assessmentId } = req.params;
-    const template = await AssessmentTemplate.findOne({ assessmentId })
+    const template = await AnswerKey.findOne({ assessmentId })
       .sort({ version: -1 })
       .populate("verifiedBy", "firstName lastName email");
     if (!template) return res.status(404).json({ message: "Template not generated yet" });
@@ -58,14 +58,14 @@ async function saveTemplate(req, res) {
     if (!Array.isArray(questions)) {
       return res.status(400).json({ message: "questions[] required" });
     }
-    const existing = await AssessmentTemplate.findOne({ assessmentId }).sort({ version: -1 });
+    const existing = await AnswerKey.findOne({ assessmentId }).sort({ version: -1 });
     let template;
     if (existing && existing.status !== "Approved") {
       existing.questions = questions;
       if (status === "Draft") existing.status = "Draft";
       template = await existing.save();
     } else {
-      template = await AssessmentTemplate.create({
+      template = await AnswerKey.create({
         assessmentId,
         questions,
         status: "Draft",
@@ -98,7 +98,7 @@ async function regenerateOne(req, res) {
     if (!assessment) return res.status(404).json({ message: "Assessment not found" });
 
     // Find the question in the current template
-    const template = await AssessmentTemplate.findOne({ assessmentId }).sort({ version: -1 });
+    const template = await AnswerKey.findOne({ assessmentId }).sort({ version: -1 });
     if (!template) return res.status(404).json({ message: "No template found" });
 
     const question = template.questions[questionIndex];
@@ -131,7 +131,7 @@ async function regenerateOne(req, res) {
 async function approveTemplate(req, res) {
   try {
     const { assessmentId } = req.params;
-    const template = await AssessmentTemplate.findOne({ assessmentId }).sort({ version: -1 });
+    const template = await AnswerKey.findOne({ assessmentId }).sort({ version: -1 });
     if (!template) return res.status(404).json({ message: "No template to approve" });
     if (template.status === "Approved") return res.json({ template });
     template.status = "Approved";
@@ -153,7 +153,7 @@ async function approveTemplate(req, res) {
 async function deleteTemplate(req, res) {
   try {
     const { assessmentId } = req.params;
-    const template = await AssessmentTemplate.findOneAndDelete({ assessmentId }).sort({ version: -1 });
+    const template = await AnswerKey.findOneAndDelete({ assessmentId }).sort({ version: -1 });
     if (!template) return res.status(404).json({ message: "No template to delete" });
     const assessment = await Assessment.findById(assessmentId);
     if (assessment) {

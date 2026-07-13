@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const { QUESTION_TYPES, DIFFICULTY } = require("./Assessment");
 
-const TEMPLATE_STATUS = ["Draft", "Approved", "Archived"];
+const ANSWER_KEY_STATUS = ["Draft", "Approved", "Archived"];
 
 const imageSchema = new mongoose.Schema(
   {
@@ -36,11 +36,15 @@ const questionSchema = new mongoose.Schema(
     evaluationRule: { type: String, default: "exact" },
     boundingBox: { type: boundingBoxSchema, default: () => ({}) },
     images: { type: [imageSchema], default: [] },
+    sourceFileIndex: { type: Number, default: null },
+    visualDescription: { type: String, default: "" },
+    hasImage: { type: Boolean, default: false },
   },
   { _id: false }
 );
 
-const assessmentTemplateSchema = new mongoose.Schema(
+// Explicit collection name = "answerkeys"
+const answerKeySchema = new mongoose.Schema(
   {
     assessmentId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -49,26 +53,35 @@ const assessmentTemplateSchema = new mongoose.Schema(
       index: true,
     },
     version: { type: Number, default: 1 },
-    status: { type: String, enum: TEMPLATE_STATUS, default: "Draft", index: true },
+    status: {
+      type: String,
+      enum: ANSWER_KEY_STATUS,
+      default: "Draft",
+      index: true,
+    },
     generatedBy: { type: String, default: "ai", enum: ["ai", "manual"] },
     modelName: { type: String, default: "mock" },
-    verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    verifiedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     verifiedAt: { type: Date, default: null },
     totalQuestions: { type: Number, default: 0 },
     totalMarks: { type: Number, default: 0 },
     questions: { type: [questionSchema], default: [] },
   },
-  { timestamps: true }
+  { timestamps: true, collection: "answerkeys" }
 );
 
-assessmentTemplateSchema.pre("save", function (next) {
+answerKeySchema.pre("save", function (next) {
   this.totalQuestions = this.questions.length;
   this.totalMarks = this.questions.reduce((a, b) => a + (b.marks || 0), 0);
   next();
 });
 
-assessmentTemplateSchema.set("toJSON", { virtuals: true, versionKey: false });
-assessmentTemplateSchema.set("toObject", { virtuals: true, versionKey: false });
+answerKeySchema.set("toJSON", { virtuals: true, versionKey: false });
+answerKeySchema.set("toObject", { virtuals: true, versionKey: false });
 
-module.exports = mongoose.model("AssessmentTemplate", assessmentTemplateSchema);
-module.exports.TEMPLATE_STATUS = TEMPLATE_STATUS;
+module.exports = mongoose.model("AnswerKey", answerKeySchema);
+module.exports.ANSWER_KEY_STATUS = ANSWER_KEY_STATUS;
