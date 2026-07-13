@@ -97,7 +97,7 @@ def generate_template(req: GenerateTemplateRequest):
         elapsed = time.time() - t0
         return GenerateTemplateResponse(
             assessmentId=req.assessmentId,
-            model="mock",
+            model="mock (no-api-key)",
             totalQuestions=len(MOCK_QUESTIONS),
             totalMarks=sum(q["marks"] for q in MOCK_QUESTIONS),
             questions=[QuestionOut(**q) for q in MOCK_QUESTIONS],
@@ -121,13 +121,13 @@ def generate_template(req: GenerateTemplateRequest):
 
         total_marks = sum(q.get("marks", 1) for q in questions) or sum(q.get("marks", 1) for q in MOCK_QUESTIONS)
         elapsed = time.time() - t0
-        logger.info(f"Done in {elapsed:.1f}s — {len(questions)} questions")
+        logger.info(f"Done in {elapsed:.1f}s — {len(questions)} questions from Gemini")
 
         if not questions:
             logger.warning("Gemini extracted 0 questions — falling back to mock")
             return GenerateTemplateResponse(
                 assessmentId=req.assessmentId,
-                model=model,
+                model="mock (gemini-empty)",
                 totalQuestions=len(MOCK_QUESTIONS),
                 totalMarks=sum(q["marks"] for q in MOCK_QUESTIONS),
                 questions=[QuestionOut(**q) for q in MOCK_QUESTIONS],
@@ -146,7 +146,7 @@ def generate_template(req: GenerateTemplateRequest):
         # Fallback to mock on error
         return GenerateTemplateResponse(
             assessmentId=req.assessmentId,
-            model=model,
+            model="mock (error)",
             totalQuestions=len(MOCK_QUESTIONS),
             totalMarks=sum(q["marks"] for q in MOCK_QUESTIONS),
             questions=[QuestionOut(**q) for q in MOCK_QUESTIONS],
