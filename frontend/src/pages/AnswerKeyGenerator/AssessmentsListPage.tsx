@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { toast } from "react-hot-toast";
 import {
   Upload, Wand2, FileText, Sparkles, Loader2, X, FileImage,
-  FileCheck2, ChevronRight, Clock,
+  FileCheck2, ChevronRight, Clock, Edit,
 } from "lucide-react";
 import Button from "../../components/ui/Button";
 import Input from "../../components/ui/Input";
@@ -206,7 +206,7 @@ function CreateAssessmentModal({
       setNumber: "Set 1",
       language: "English",
       academicYear: "2025-26",
-      duration: 60,
+      duration: 30,
     },
   });
   const [files, setFiles] = useState<File[]>([]);
@@ -382,7 +382,7 @@ function ProcessingState({ phase, progress }: { phase: Phase; progress: number }
         </p>
         <p className="text-xs text-slate-500 mt-0.5">
           {phase === "uploading" && "Saving question paper to server"}
-          {phase === "extracting" && "Sending to Gemini Vision for analysis"}
+          {phase === "extracting" && "AI is analyzing the question paper"}
           {phase === "ready" && "Almost there"}
         </p>
       </div>

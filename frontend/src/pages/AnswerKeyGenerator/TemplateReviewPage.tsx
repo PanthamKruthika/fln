@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import {
-  Wand2, CheckCircle2, Save, RotateCcw, ChevronLeft,
+  Wand2, CheckCircle2, RotateCcw, ChevronLeft,
   Edit3, Check, X, BookOpen, Trophy, Clock, Plus, Trash2,
-  KeyRound, AlertCircle, ImageIcon, Sparkles, Loader2, Database, Edit,
+  KeyRound, AlertCircle, ImageIcon, Sparkles, Loader2, Edit,
 } from "lucide-react";
 import Button from "../../components/ui/Button";
 import Badge from "../../components/ui/Badge";
@@ -44,11 +44,9 @@ export default function TemplateReviewPage() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const initial = (location.state as { template?: { questions?: EditableQuestion[] }; model?: string })?.template?.questions || [];
-  const [questions, setQuestions] = useState<EditableQuestion[]>(initial);
-  const [modelName, setModelName] = useState(
-    (location.state as { model?: string })?.model || "mock"
-  );
+  const locationState = location.state as { template?: { questions?: EditableQuestion[] }; model?: string } | null;
+  const [questions, setQuestions] = useState<EditableQuestion[]>(locationState?.template?.questions || []);
+  const [modelName, setModelName] = useState(locationState?.model || "mock");
   const [editingId, setEditingId] = useState<number | null>(null);
 
   const { data: assessment } = useQuery({
@@ -57,35 +55,62 @@ export default function TemplateReviewPage() {
     enabled: !!id,
   });
 
-  const step: WorkflowStep = assessment ? STATUS_STEP[assessment.templateStatus] || "review" : "review";
-
-  const saveMut = useMutation({
-    mutationFn: (opts?: { silent?: boolean; questionsOverride?: EditableQuestion[] }) =>
-      assessmentApi.saveTemplate(id!, {
-        questions: opts?.questionsOverride || questions,
-        status: "Draft",
-        modelName,
-      }),
-    onSuccess: (r, vars) => {
-      // Mark each question with current savedAt timestamp so the card shows 'Saved ✓' briefly
-      const now = Date.now();
-      setQuestions((qs) =>
-        qs.map((q) => ({ ...q, _savedAt: now }))
-      );
-      if (!vars?.silent) toast.success("Saved to database ✓");
-    },
-    onError: (e: Error, vars) => {
-      if (!vars?.silent) toast.error(`Save failed: ${e.message}`);
-    },
+  // Fetch the existing template from DB on mount so users editing
+  // an already-created assessment see their saved questions + answers.
+  const { data: existingTemplate, isLoading: templateLoading } = useQuery({
+    queryKey: ["template", id],
+    queryFn: () => assessmentApi.getTemplate(id!).then((r) => r.data.template),
+    enabled: !!id,
+    staleTime: 0,
   });
 
+  useEffect(() => {
+    if (existingTemplate?.questions) {
+      setQuestions(existingTemplate.questions as EditableQuestion[]);
+      if (existingTemplate.modelName) setModelName(existingTemplate.modelName);
+    }
+  }, [existingTemplate]);
+
+  const step: WorkflowStep = assessment ? STATUS_STEP[assessment.templateStatus] || "review" : "review";
+
   const approveMut = useMutation({
-    mutationFn: () => assessmentApi.approveTemplate(id!),
-    onSuccess: () => {
-      toast.success("Template approved!");
-      navigate("/answer-key-generator");
+    mutationFn: async (opts?: { questionsOverride?: EditableQuestion[] }) => {
+      const toSave = opts?.questionsOverride || questions;
+      // First persist all edits as Draft, then approve
+      try {
+        await assessmentApi.saveTemplate(id!, {
+          questions: toSave,
+          status: "Draft",
+          modelName,
+        });
+      } catch (e: any) {
+        throw new Error(`Save failed: ${e?.response?.data?.message || e.message}`);
+      }
+      try {
+        const approveRes = await assessmentApi.approveTemplate(id!);
+        return { savedQuestions: toSave, approvedRes: approveRes };
+      } catch (e: any) {
+        throw new Error(`Approve failed: ${e?.response?.data?.message || e.message}`);
+      }
     },
-    onError: (e: Error) => toast.error(e.message),
+    onSuccess: (r) => {
+      const saved = r.savedQuestions as EditableQuestion[];
+      const now = Date.now();
+      setQuestions((qs) =>
+        qs.map((q, i) => {
+          const s = saved[i];
+          return s
+            ? { ...s, _savedAt: now, _edit: false }
+            : { ...q, _savedAt: now, _edit: false };
+        })
+      );
+      setEditingId(null);
+      toast.success("Template approved & saved to database ✓");
+      setTimeout(() => navigate("/answer-key-generator"), 800);
+    },
+    onError: (e: Error) => {
+      toast.error(e.message);
+    },
   });
 
   const generateAgainMut = useMutation({
@@ -237,10 +262,15 @@ export default function TemplateReviewPage() {
 
       {/* Questions */}
       <Card
-        title={`Questions &amp; Answer Key (${questions.length})`}
+        title={`Questions & Answer Key (${questions.length})`}
         subtitle="Click the pencil icon to edit a question, its answer, and accepted alternates"
       >
-        {questions.length === 0 ? (
+        {templateLoading ? (
+          <div className="text-center py-16">
+            <Loader2 className="w-6 h-6 mx-auto text-blue-500 animate-spin" />
+            <p className="text-sm text-slate-500 mt-2">Loading saved template from database…</p>
+          </div>
+        ) : questions.length === 0 ? (
           <div className="text-center py-16">
             <AlertCircle className="w-10 h-10 text-slate-300 mx-auto mb-2" />
             <p className="text-sm text-slate-500">No questions yet.</p>
@@ -258,8 +288,11 @@ export default function TemplateReviewPage() {
                 isEditing={editingId === idx}
                 onToggleEdit={() => {
                   if (editingId === idx) {
-                    // Exiting edit mode → explicitly save the latest state to DB
-                    saveMut.mutate({});
+                    // Exiting edit mode → just commit edits to local state.
+                    // DB save only happens when "Approve Template" is clicked.
+                    setQuestions((qs) =>
+                      qs.map((q, i) => (i === idx ? { ...q, _edit: false } : q))
+                    );
                   }
                   setEditingId(editingId === idx ? null : idx);
                 }}
@@ -269,7 +302,7 @@ export default function TemplateReviewPage() {
                 onRemoveAlternate={(altIdx) => removeAlternate(idx, altIdx)}
                 onRegenerate={() => regenerateOneMut.mutate(idx)}
                 regenerating={regenerateOneMut.isPending && regenerateOneMut.variables === idx}
-                saving={saveMut.isPending && editingId === idx}
+                saving={approveMut.isPending && editingId === idx}
                 justSaved={!!q._savedAt && Date.now() - (q._savedAt as number) < 4000}
               />
             ))}
@@ -309,9 +342,6 @@ export default function TemplateReviewPage() {
           <ChevronLeft className="w-4 h-4" /> Back
         </Button>
         <div className="flex items-center gap-2">
-          <Button variant="secondary" loading={saveMut.isPending} onClick={() => saveMut.mutate({ questionsOverride: questions })}>
-            <Save className="w-4 h-4" /> Save Draft to DB
-          </Button>
           <Button
             variant="outline"
             loading={generateAgainMut.isPending}
@@ -382,11 +412,11 @@ function QuestionCard({
           {saving && <Badge tone="amber" withDot><Loader2 className="w-2.5 h-2.5 animate-spin mr-0.5" />Saving…</Badge>}
           {!saving && justSaved && (
             <Badge tone="green" withDot>
-              <Database className="w-2.5 h-2.5 mr-0.5" />
-              Saved to DB
+              <Check className="w-2.5 h-2.5 mr-0.5" />
+              Approved &amp; Saved to DB
             </Badge>
           )}
-          {q._edit && !justSaved && !saving && <Badge tone="blue" withDot>Edited (unsaved)</Badge>}
+          {q._edit && !justSaved && !saving && <Badge tone="amber" withDot>Edited — pending approval</Badge>}
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -403,7 +433,7 @@ function QuestionCard({
             className={`p-1.5 rounded-md transition disabled:opacity-50 ${
               isEditing ? "text-green-600 bg-green-50" : "text-slate-400 hover:text-blue-600 hover:bg-blue-50"
             }`}
-            title={isEditing ? "Save edits to database" : "Edit question + answer"}
+            title={isEditing ? "Done editing" : "Edit question + answer"}
           >
             {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : isEditing ? <Check className="w-3.5 h-3.5" /> : <Edit3 className="w-3.5 h-3.5" />}
           </button>
@@ -482,7 +512,16 @@ function QuestionCard({
                 <Input
                   label="Correct Answer"
                   value={q.correctAnswer}
-                  onChange={(e) => onUpdate({ correctAnswer: e.target.value })}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    // If a real answer is being typed and rule is "manual",
+                    // auto-switch to "exact" so the answer shows up.
+                    if (val.trim() && q.evaluationRule === "manual") {
+                      onUpdate({ correctAnswer: val, evaluationRule: "exact" });
+                    } else {
+                      onUpdate({ correctAnswer: val });
+                    }
+                  }}
                   placeholder={isManual ? "N/A — manual grading" : "AI-generated answer (editable)"}
                 />
               </div>
@@ -613,7 +652,7 @@ function QuestionCard({
               <span className="text-slate-500 normal-case font-normal">{q.evaluationRule}</span>
             </div>
 
-            {isManual ? (
+            {isManual && !hasAnswer ? (
               <p className="text-sm text-slate-500 italic">Manual grading — no auto answer key</p>
             ) : hasAnswer ? (
               <>
