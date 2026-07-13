@@ -1,15 +1,22 @@
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { toast } from "react-hot-toast";
-import { Upload, Wand2, FileText, Sparkles, Loader2, X, FileImage } from "lucide-react";
+import {
+  Upload, Wand2, FileText, Sparkles, Loader2, X, FileImage,
+  FileCheck2, ChevronRight, Clock,
+} from "lucide-react";
 import Button from "../../components/ui/Button";
 import Input from "../../components/ui/Input";
 import Select from "../../components/ui/Select";
 import Modal from "../../components/ui/Modal";
+import Card from "../../components/ui/Card";
+import Badge from "../../components/ui/Badge";
+import StatusChip from "../../components/ui/StatusChip";
 import assessmentApi from "../../services/assessmentApi";
 import type { CreateAssessmentDTO } from "../../services/assessmentApi";
+import type { Assessment } from "../../types/assessment";
 import {
   ASSESSMENT_TYPES,
   SUBJECTS,
@@ -24,6 +31,13 @@ export default function AssessmentsListPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
+
+  // Load existing assessments to show as recent templates
+  const { data: assessments, isLoading } = useQuery({
+    queryKey: ["assessments"],
+    queryFn: () => assessmentApi.list().then((r) => r.data.assessments),
+    refetchOnWindowFocus: false,
+  });
 
   const fullMut = useMutation({
     mutationFn: async ({ data, files }: { data: CreateAssessmentDTO; files: File[] }) => {
@@ -57,49 +71,99 @@ export default function AssessmentsListPage() {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div>
-        <h1 className="text-xl font-semibold text-slate-900">AI Assessment Template Generator</h1>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Upload a question paper PDF → AI extracts questions → review &amp; approve the template.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-900">AI Assessment Template Generator</h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Upload a question paper PDF → AI extracts questions → review &amp; approve the template.
+          </p>
+        </div>
+        <Button onClick={() => setShowCreate(true)}>
+          <Wand2 className="w-4 h-4" /> New Assessment
+        </Button>
       </div>
 
-      {/* Empty-state CTA — single button, no list of past assessments */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="px-8 py-12 text-center">
-          <div className="w-16 h-16 mx-auto rounded-2xl bg-blue-50 text-blue-600 grid place-items-center mb-4">
-            <Sparkles className="w-8 h-8" />
+      {/* Recent Assessments (if any exist) */}
+      {!isLoading && assessments && assessments.length > 0 && (
+        <Card title="Your Recent Assessments" subtitle={`${assessments.length} saved in the database`}>
+          <div className="divide-y divide-slate-100 -m-5">
+            {assessments.slice(0, 8).map((a: Assessment) => {
+              const tpl = a.templateId && typeof a.templateId === "object" ? a.templateId : null;
+              const tplId = tpl?._id || (typeof a.templateId === "string" ? a.templateId : null);
+              return (
+                <div
+                  key={a._id}
+                  className="flex items-center gap-4 px-5 py-3 hover:bg-slate-50 transition cursor-pointer"
+                  onClick={() => navigate(`/assessment-template-generator/${a._id}/review`)}
+                >
+                  <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 grid place-items-center flex-shrink-0">
+                    {a.templateStatus === "Approved" ? <FileCheck2 className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-900 truncate">{a.title}</p>
+                    <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500">
+                      <Badge tone="blue">{a.grade}</Badge>
+                      <Badge tone="purple">{a.subject}</Badge>
+                      <span className="flex items-center gap-0.5">
+                        <Clock className="w-2.5 h-2.5" />
+                        {new Date(a.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <StatusChip status={a.templateStatus} />
+                    {tpl && (
+                      <span className="text-xs text-slate-600">
+                        {tpl.totalQuestions ?? 0}Q · {tpl.totalMarks ?? 0}M
+                      </span>
+                    )}
+                    <ChevronRight className="w-4 h-4 text-slate-400" />
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <h2 className="text-lg font-semibold text-slate-900">Start a new assessment template</h2>
-          <p className="text-sm text-slate-500 mt-1.5 max-w-md mx-auto">
-            Enter class details, choose a paper type, and upload your question paper PDF. The AI
-            will extract every question for you to review and approve.
-          </p>
+        </Card>
+      )}
 
-          <button
-            onClick={() => setShowCreate(true)}
-            className="mt-6 inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-blue-600 text-white text-sm font-semibold shadow-sm hover:bg-blue-700 transition"
-          >
-            <Wand2 className="w-4 h-4" />
-            Create Assessment + Template
-          </button>
+      {/* Empty-state CTA — shown when no assessments exist */}
+      {!isLoading && (!assessments || assessments.length === 0) && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-8 py-12 text-center">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-blue-50 text-blue-600 grid place-items-center mb-4">
+              <Sparkles className="w-8 h-8" />
+            </div>
+            <h2 className="text-lg font-semibold text-slate-900">Start a new assessment template</h2>
+            <p className="text-sm text-slate-500 mt-1.5 max-w-md mx-auto">
+              Enter class details, choose a paper type, and upload your question paper PDF. The AI
+              will extract every question for you to review and approve.
+            </p>
 
-          <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-3 max-w-2xl mx-auto">
-            <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-left">
-              <p className="text-xs font-semibold text-blue-900">1 · Enter details</p>
-              <p className="text-[11px] text-blue-700 mt-1">Class, subject, paper type, marks</p>
-            </div>
-            <div className="bg-purple-50 border border-purple-100 rounded-lg p-3 text-left">
-              <p className="text-xs font-semibold text-purple-900">2 · Upload PDF</p>
-              <p className="text-[11px] text-purple-700 mt-1">We send it to AI for analysis</p>
-            </div>
-            <div className="bg-green-50 border border-green-100 rounded-lg p-3 text-left">
-              <p className="text-xs font-semibold text-green-900">3 · Review &amp; approve</p>
-              <p className="text-[11px] text-green-700 mt-1">Edit questions, then save</p>
+            <button
+              onClick={() => setShowCreate(true)}
+              className="mt-6 inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-blue-600 text-white text-sm font-semibold shadow-sm hover:bg-blue-700 transition"
+            >
+              <Wand2 className="w-4 h-4" />
+              Create Assessment + Template
+            </button>
+
+            <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-3 max-w-2xl mx-auto">
+              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-left">
+                <p className="text-xs font-semibold text-blue-900">1 · Enter details</p>
+                <p className="text-[11px] text-blue-700 mt-1">Class, subject, paper type, marks</p>
+              </div>
+              <div className="bg-purple-50 border border-purple-100 rounded-lg p-3 text-left">
+                <p className="text-xs font-semibold text-purple-900">2 · Upload PDF</p>
+                <p className="text-[11px] text-purple-700 mt-1">We send it to AI for analysis</p>
+              </div>
+              <div className="bg-green-50 border border-green-100 rounded-lg p-3 text-left">
+                <p className="text-xs font-semibold text-green-900">3 · Review &amp; approve</p>
+                <p className="text-[11px] text-green-700 mt-1">Edit questions, then save</p>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Create Modal */}
       <CreateAssessmentModal
