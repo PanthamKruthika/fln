@@ -2,7 +2,8 @@ export const ASSESSMENT_STATUS = ["Draft", "Scheduled", "Active", "Completed", "
 export const ASSESSMENT_TEMPLATE_STATUS = ["Pending", "Processing", "Generated", "Draft", "Approved"] as const;
 export const ASSESSMENT_TYPES = ["Diagnostic", "Formative", "Summative", "Practice"] as const;
 export const SUBJECTS = ["Literacy", "Numeracy", "Both"] as const;
-export const GRADES = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8"] as const;
+export const GRADES = ["Class 1", "Class 2", "Class 3", "Class 4"] as const;
+export const SET_NUMBERS = ["Set 1", "Set 2", "Set 3", "Set 4", "Set A", "Set B", "Set C", "Set D"] as const;
 export const LANGUAGES = ["English", "Hindi", "Tamil", "Telugu", "Bengali", "Marathi", "Gujarati", "Kannada", "Malayalam", "Punjabi", "Urdu"] as const;
 export const QUESTION_TYPES = ["MCQ", "True/False", "Fill in the Blanks", "Short Answer", "Long Answer", "Match the Following", "Counting", "Addition", "Subtraction", "Number Recognition", "Drawing", "Trace"] as const;
 export const DIFFICULTY = ["Easy", "Medium", "Hard"] as const;
@@ -75,6 +76,8 @@ export interface Assessment {
   questionPaperFileName: string | null;
   questionPaperSize: number | null;
   assessmentType: (typeof ASSESSMENT_TYPES)[number];
+  setNumber: (typeof SET_NUMBERS)[number];
+  assessmentCode?: string | null;
   status: (typeof ASSESSMENT_STATUS)[number];
   templateStatus: (typeof ASSESSMENT_TEMPLATE_STATUS)[number];
   templateId: AssessmentTemplate | string | null;

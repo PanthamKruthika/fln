@@ -22,6 +22,7 @@ import {
   SUBJECTS,
   GRADES,
   LANGUAGES,
+  SET_NUMBERS,
 } from "../../types/assessment";
 
 type Phase = "idle" | "uploading" | "extracting" | "ready";
@@ -85,25 +86,25 @@ export default function AssessmentsListPage() {
 
       {/* Recent Assessments (if any exist) */}
       {!isLoading && assessments && assessments.length > 0 && (
-        <Card title="Your Recent Assessments" subtitle={`${assessments.length} saved in the database`}>
+        <Card title="Your Recent Assessments" subtitle={`${assessments.length} saved in the database — IDs match student_id + assessment_id for evaluation`}>
           <div className="divide-y divide-slate-100 -m-5">
             {assessments.slice(0, 8).map((a: Assessment) => {
               const tpl = a.templateId && typeof a.templateId === "object" ? a.templateId : null;
-              const tplId = tpl?._id || (typeof a.templateId === "string" ? a.templateId : null);
               return (
                 <div
                   key={a._id}
                   className="flex items-center gap-4 px-5 py-3 hover:bg-slate-50 transition cursor-pointer"
                   onClick={() => navigate(`/answer-key-generator/${a._id}/review`)}
                 >
-                  <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 grid place-items-center flex-shrink-0">
-                    {a.templateStatus === "Approved" ? <FileCheck2 className="w-4 h-4" /> : <FileText className="w-4 h-4" />}
+                  <div className="px-3 py-2 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 text-white font-mono font-bold text-sm flex-shrink-0">
+                    {a.assessmentCode || "AS????"}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-slate-900 truncate">{a.title}</p>
                     <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500">
                       <Badge tone="blue">{a.grade}</Badge>
-                      <Badge tone="purple">{a.subject}</Badge>
+                      {a.setNumber && <Badge tone="purple">{a.setNumber}</Badge>}
+                      <Badge tone="slate">{a.subject}</Badge>
                       <span className="flex items-center gap-0.5">
                         <Clock className="w-2.5 h-2.5" />
                         {new Date(a.createdAt).toLocaleDateString()}
@@ -199,10 +200,10 @@ function CreateAssessmentModal({
       assessmentType: "Diagnostic",
       subject: "Numeracy",
       grade: "Class 3",
+      setNumber: "Set 1",
       language: "English",
       academicYear: "2025-26",
       duration: 60,
-      totalMarks: 30,
     },
   });
   const [files, setFiles] = useState<File[]>([]);
@@ -244,6 +245,7 @@ function CreateAssessmentModal({
         <ProcessingState phase={phase} progress={progress} />
       ) : (
         <form onSubmit={handleSubmit(submit)} className="space-y-4">
+          <p className="text-xs text-slate-500 -mt-1">FLN supports Class 1 to 4 (Foundational Literacy &amp; Numeracy)</p>
           <Input
             label="Assessment Title *"
             {...register("title", { required: true })}
@@ -262,9 +264,14 @@ function CreateAssessmentModal({
               {...register("subject", { required: true })}
             />
             <Select
-              label="Class / Grade *"
+              label="Class *"
               options={GRADES.map((g) => ({ value: g, label: g }))}
               {...register("grade", { required: true })}
+            />
+            <Select
+              label="Set Number *"
+              options={SET_NUMBERS.map((s) => ({ value: s, label: s }))}
+              {...register("setNumber", { required: true })}
             />
             <Select
               label="Language"
@@ -276,11 +283,6 @@ function CreateAssessmentModal({
               label="Duration (min)"
               type="number"
               {...register("duration", { valueAsNumber: true })}
-            />
-            <Input
-              label="Total Marks"
-              type="number"
-              {...register("totalMarks", { valueAsNumber: true })}
             />
           </div>
 

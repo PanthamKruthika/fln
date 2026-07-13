@@ -20,13 +20,23 @@ const QUESTION_TYPES = [
 ];
 const DIFFICULTY = ["Easy", "Medium", "Hard"];
 const LANGUAGES = ["English", "Hindi", "Tamil", "Telugu", "Bengali", "Marathi", "Gujarati", "Kannada", "Malayalam", "Punjabi", "Urdu"];
-const GRADES = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8"];
+const GRADES = ["Class 1", "Class 2", "Class 3", "Class 4"];
+const SET_NUMBERS = ["Set 1", "Set 2", "Set 3", "Set 4", "Set A", "Set B", "Set C", "Set D"];
 
 const assessmentSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true },
     subject: { type: String, enum: SUBJECTS, required: true },
-    grade: { type: String, required: true, trim: true },
+    grade: { type: String, enum: GRADES, required: true, trim: true },
+    setNumber: { type: String, enum: SET_NUMBERS, default: "Set 1" },
+    assessmentCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
+      index: true,
+      // Format: "AS0010", "AS0011", ...
+    },
     language: { type: String, default: "English", trim: true },
     academicYear: { type: String, default: "2025-26", trim: true },
     totalMarks: { type: Number, default: 0 },
@@ -67,3 +77,4 @@ module.exports.QUESTION_TYPES = QUESTION_TYPES;
 module.exports.DIFFICULTY = DIFFICULTY;
 module.exports.LANGUAGES = LANGUAGES;
 module.exports.GRADES = GRADES;
+module.exports.SET_NUMBERS = SET_NUMBERS;

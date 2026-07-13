@@ -4,18 +4,36 @@ const Assessment = require("../models/Assessment");
 const AnswerKey = require("../models/AnswerKey");
 const pythonClient = require("../services/pythonClient");
 const { UPLOAD_DIR } = require("../services/pdfParser");
+const Counter = require("../models/Counter");
 const auditLog = require("../services/audit");
 
 function owner(req) {
   return req.user?._id;
 }
 
+/**
+ * Generate the next human-readable assessmentCode (e.g., "AS0010").
+ * Uses a counter collection with atomic $inc to avoid race conditions.
+ */
+async function nextAssessmentCode() {
+  const Counter = require("../models/Counter");
+  const doc = await Counter.findOneAndUpdate(
+    { _id: "assessment_code" },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+  const seq = doc.seq || 1;
+  // Pad to 4 digits: 1 → "AS0001", 10 → "AS0010", 1234 → "AS1234"
+  return `AS${String(seq).padStart(4, "0")}`;
+}
+
 async function createAssessment(req, res) {
   try {
-    const { title, subject, grade, language, academicYear, duration, totalMarks, assessmentType } = req.body || {};
+    const { title, subject, grade, language, academicYear, duration, totalMarks, assessmentType, setNumber } = req.body || {};
     if (!title || !subject || !grade) {
       return res.status(400).json({ message: "title, subject, grade are required" });
     }
+    const code = await nextAssessmentCode();
     const files = Array.isArray(req.files) && req.files.length > 0
       ? req.files
       : req.file ? [req.file] : [];
@@ -24,6 +42,8 @@ async function createAssessment(req, res) {
       title: String(title).trim(),
       subject,
       grade,
+      setNumber: setNumber || "Set 1",
+      assessmentCode: code,
       language: language || "English",
       academicYear: academicYear || "2025-26",
       duration: Number(duration) || 60,

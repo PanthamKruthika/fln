@@ -5,6 +5,7 @@ export interface CreateAssessmentDTO {
   title: string;
   subject: string;
   grade: string;
+  setNumber?: string;
   language?: string;
   academicYear?: string;
   duration?: number;
@@ -63,6 +64,7 @@ const assessmentApi = {
     form.append("title", data.title);
     form.append("subject", data.subject);
     form.append("grade", data.grade);
+    if (data.setNumber) form.append("setNumber", data.setNumber);
     if (data.language) form.append("language", data.language);
     if (data.academicYear) form.append("academicYear", data.academicYear);
     if (data.duration) form.append("duration", String(data.duration));
