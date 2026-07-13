@@ -11,11 +11,12 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 
 from services.pdf_processor import pdf_to_images, pdf_to_text
-from services.gemini_service import analyze_page, is_configured
+import services.groq_service as groq_svc
+import services.gemini_service as gemini_svc
 from services.template_builder import build_template
 from utils.logger import get_logger
 
-app = FastAPI(title="FLN Template Builder", version="1.0.0")
+app = FastAPI(title="FLN Template Builder", version="1.1.0")
 logger = get_logger("main")
 
 app.add_middleware(
@@ -50,10 +51,20 @@ class QuestionOut(BaseModel):
 
 class GenerateTemplateResponse(BaseModel):
     assessmentId: str
+    provider: str
     model: str
     totalQuestions: int
     totalMarks: int
     questions: List[QuestionOut]
+
+
+def active_provider():
+    """Pick the first configured provider in order: Groq → Gemini → None."""
+    if groq_svc.is_configured():
+        return ("groq", groq_svc.get_model(), groq_svc.analyze_page)
+    if gemini_svc.is_configured():
+        return ("gemini", os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"), gemini_svc.analyze_page)
+    return (None, "mock", None)
 
 
 MOCK_QUESTIONS = [
@@ -72,85 +83,93 @@ MOCK_QUESTIONS = [
 
 @app.get("/health")
 def health():
+    provider, model, _ = active_provider()
     return {
         "ok": True,
         "service": "fln-template-builder",
         "time": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "gemini_configured": is_configured(),
-        "model": os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
+        "provider": provider,
+        "model": model,
+        "providers": {
+            "groq": {"configured": groq_svc.is_configured(), "model": groq_svc.get_model() if groq_svc.is_configured() else None},
+            "gemini": {"configured": gemini_svc.is_configured(), "model": os.environ.get("GEMINI_MODEL", "gemini-2.0-flash") if gemini_svc.is_configured() else None},
+        },
     }
 
 
 @app.post("/generate-template", response_model=GenerateTemplateResponse)
 def generate_template(req: GenerateTemplateRequest):
     t0 = time.time()
-    logger.info(f"generate-template {req.assessmentId} | pdf={req.pdfPath} | gemini={is_configured()}")
+    provider_name, model_name, analyze_fn = active_provider()
+    logger.info(f"generate-template {req.assessmentId} | provider={provider_name} model={model_name} pdf={'yes' if req.pdfPath else 'no'}")
 
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-
-    # No API key or no PDF → return mock questions
-    if not is_configured() or not req.pdfPath:
-        if not req.pdfPath:
-            logger.info("No pdfPath — returning mock questions")
+    if not provider_name or not req.pdfPath:
+        # No provider or no PDF → mock
+        if not provider_name:
+            logger.info("No AI provider configured — returning mock questions")
         else:
-            logger.info("GEMINI_API_KEY not set — returning mock questions")
-        elapsed = time.time() - t0
-        return GenerateTemplateResponse(
-            assessmentId=req.assessmentId,
-            model="mock (no-api-key)",
-            totalQuestions=len(MOCK_QUESTIONS),
-            totalMarks=sum(q["marks"] for q in MOCK_QUESTIONS),
-            questions=[QuestionOut(**q) for q in MOCK_QUESTIONS],
-        )
+            logger.info("No pdfPath — returning mock questions")
+        return _mock_response(req.assessmentId)
 
-    # Real pipeline: PDF → images → Gemini
+    # Real AI pipeline
     try:
         images = pdf_to_images(req.pdfPath)
         if not images:
-            raise ValueError(f"Could not render PDF at {req.pdfPath}")
+            logger.warning(f"Could not render PDF — falling back to mock")
+            return _mock_with_label(req.assessmentId, "mock (pdf-render-failed)")
 
-        all_page_results: List[List[Dict[str, Any]]] = []
-        for i, img_bytes in enumerate(images, start=1):
-            qs = analyze_page(img_bytes, i, req.metadata or {})
-            all_page_results.append(qs)
+        all_results: List[List[Dict[str, Any]]] = []
+        for i, img in enumerate(images, start=1):
+            qs = analyze_fn(img, i, req.metadata or {})
+            all_results.append(qs)
 
-        questions = []
-        for page_qs in all_page_results:
-            for q in page_qs:
-                questions.append(q)
-
-        total_marks = sum(q.get("marks", 1) for q in questions) or sum(q.get("marks", 1) for q in MOCK_QUESTIONS)
+        questions = [q for page in all_results for q in page]
         elapsed = time.time() - t0
-        logger.info(f"Done in {elapsed:.1f}s — {len(questions)} questions from Gemini")
+        logger.info(f"Done in {elapsed:.1f}s — {len(questions)} questions from {provider_name}")
 
         if not questions:
-            logger.warning("Gemini extracted 0 questions — falling back to mock")
-            return GenerateTemplateResponse(
-                assessmentId=req.assessmentId,
-                model="mock (gemini-empty)",
-                totalQuestions=len(MOCK_QUESTIONS),
-                totalMarks=sum(q["marks"] for q in MOCK_QUESTIONS),
-                questions=[QuestionOut(**q) for q in MOCK_QUESTIONS],
-            )
+            logger.warning(f"{provider_name} extracted 0 questions — falling back to mock")
+            return _mock_with_label(req.assessmentId, f"mock ({provider_name}-empty)")
+
+        # Dedup + renumber by question_parser via template_builder
+        from services.question_parser import parse_pages
+        deduped = parse_pages(all_results)
+        total_marks = sum(q.get("marks", 1) for q in deduped)
 
         return GenerateTemplateResponse(
             assessmentId=req.assessmentId,
-            model=model,
-            totalQuestions=len(questions),
+            provider=provider_name,
+            model=model_name,
+            totalQuestions=len(deduped),
             totalMarks=total_marks,
-            questions=[QuestionOut(**q) for q in questions],
+            questions=[QuestionOut(**q) for q in deduped],
         )
 
     except Exception as e:
         logger.exception(f"Template generation failed: {e}")
-        # Fallback to mock on error
-        return GenerateTemplateResponse(
-            assessmentId=req.assessmentId,
-            model="mock (error)",
-            totalQuestions=len(MOCK_QUESTIONS),
-            totalMarks=sum(q["marks"] for q in MOCK_QUESTIONS),
-            questions=[QuestionOut(**q) for q in MOCK_QUESTIONS],
-        )
+        return _mock_with_label(req.assessmentId, f"mock (error)")
+
+
+def _mock_response(assessment_id: str) -> GenerateTemplateResponse:
+    return GenerateTemplateResponse(
+        assessmentId=assessment_id,
+        provider="mock",
+        model="mock",
+        totalQuestions=len(MOCK_QUESTIONS),
+        totalMarks=sum(q["marks"] for q in MOCK_QUESTIONS),
+        questions=[QuestionOut(**q) for q in MOCK_QUESTIONS],
+    )
+
+
+def _mock_with_label(assessment_id: str, label: str) -> GenerateTemplateResponse:
+    return GenerateTemplateResponse(
+        assessmentId=assessment_id,
+        provider="mock",
+        model=label,
+        totalQuestions=len(MOCK_QUESTIONS),
+        totalMarks=sum(q["marks"] for q in MOCK_QUESTIONS),
+        questions=[QuestionOut(**q) for q in MOCK_QUESTIONS],
+    )
 
 
 if __name__ == "__main__":
