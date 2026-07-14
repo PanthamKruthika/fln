@@ -3,7 +3,7 @@ import { useParams, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import {
-  Wand2, CheckCircle2, RotateCcw, ChevronLeft,
+  Wand2, CheckCircle2, RotateCcw, ChevronLeft, FileDown,
   Edit3, Check, X, BookOpen, Trophy, Clock, Plus, Trash2,
   KeyRound, AlertCircle, ImageIcon, Sparkles, Loader2, Edit,
 } from "lucide-react";
@@ -13,6 +13,7 @@ import Card from "../../components/ui/Card";
 import Select from "../../components/ui/Select";
 import Input from "../../components/ui/Input";
 import assessmentApi from "../../services/assessmentApi";
+import { exportAnswerKeyPdf } from "../../utils/exportAnswerKeyPdf";
 import type { Question } from "../../types/assessment";
 import { QUESTION_TYPES, DIFFICULTY } from "../../types/assessment";
 
@@ -123,6 +124,40 @@ export default function TemplateReviewPage() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  function handleExportPdf() {
+    if (questions.length === 0) {
+      toast.error("No questions to export");
+      return;
+    }
+    try {
+      exportAnswerKeyPdf({
+        assessmentCode: assessment?.assessmentCode || existingTemplate?.assessmentCode || "AS0000",
+        title: assessment?.title || "Untitled Assessment",
+        grade: assessment?.grade || "—",
+        subject: assessment?.subject || "—",
+        setNumber: assessment?.setNumber,
+        status: existingTemplate?.status || assessment?.templateStatus || "Draft",
+        totalMarks: existingTemplate?.totalMarks || questions.reduce((s, q) => s + (q.marks || 0), 0),
+        questions: questions.map((q) => ({
+          questionNo: q.questionNo,
+          pageNumber: q.pageNumber,
+          questionText: q.questionText,
+          questionType: q.questionType,
+          difficulty: q.difficulty,
+          marks: q.marks,
+          correctAnswer: q.correctAnswer,
+          alternateAnswers: q.alternateAnswers || [],
+          evaluationRule: q.evaluationRule,
+          images: q.images || [],
+        })),
+        approvedAt: existingTemplate?.verifiedAt,
+      });
+      toast.success("Answer key PDF downloaded ✓");
+    } catch (e: any) {
+      toast.error(`PDF export failed: ${e.message}`);
+    }
+  }
 
   const regenerateOneMut = useMutation({
     mutationFn: (questionIndex: number) =>
@@ -348,6 +383,13 @@ export default function TemplateReviewPage() {
             onClick={() => generateAgainMut.mutate()}
           >
             <RotateCcw className="w-4 h-4" /> Generate Again
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleExportPdf}
+            disabled={questions.length === 0}
+          >
+            <FileDown className="w-4 h-4" /> Export PDF
           </Button>
           <Button
             variant="primary"

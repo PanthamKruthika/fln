@@ -13,7 +13,6 @@ from typing import Optional, Dict, Any, List
 
 from services.pdf_processor import pdf_to_images_and_pictures, render_single_image, crop_page_to_bbox
 import services.groq_service as groq_svc
-import services.gemini_service as gemini_svc
 from services.question_parser import parse_pages, SUBJECTIVE_TYPES
 from utils.logger import get_logger
 
@@ -83,11 +82,9 @@ class GenerateTemplateResponse(BaseModel):
 
 
 def active_provider():
-    """Provider chain: Groq → Gemini → None."""
+    """Provider chain: Groq only."""
     if groq_svc.is_configured():
         return ("groq", groq_svc.get_model(), groq_svc.analyze_page)
-    if gemini_svc.is_configured():
-        return ("gemini", os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"), gemini_svc.analyze_page)
     return (None, "mock", None)
 
 
@@ -173,7 +170,6 @@ def health():
         "model": model,
         "providers": {
             "groq": {"configured": groq_svc.is_configured(), "model": groq_svc.get_model() if groq_svc.is_configured() else None},
-            "gemini": {"configured": gemini_svc.is_configured(), "model": os.environ.get("GEMINI_MODEL", "gemini-2.0-flash") if gemini_svc.is_configured() else None},
         },
     }
 
