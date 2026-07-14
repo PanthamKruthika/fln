@@ -73,6 +73,9 @@ export default function TemplateReviewPage() {
   }, [existingTemplate]);
 
   const step: WorkflowStep = assessment ? STATUS_STEP[assessment.templateStatus] || "review" : "review";
+  const isApproved =
+    assessment?.templateStatus === "Approved" ||
+    (existingTemplate as any)?.status === "Approved";
 
   const approveMut = useMutation({
     mutationFn: async (opts?: { questionsOverride?: EditableQuestion[] }) => {
@@ -384,13 +387,16 @@ export default function TemplateReviewPage() {
           >
             <RotateCcw className="w-4 h-4" /> Generate Again
           </Button>
-          <Button
-            variant="outline"
-            onClick={handleExportPdf}
-            disabled={questions.length === 0}
-          >
-            <FileDown className="w-4 h-4" /> Export PDF
-          </Button>
+          {isApproved && (
+            <Button
+              variant="outline"
+              onClick={handleExportPdf}
+              disabled={questions.length === 0}
+              title="Download printable PDF of the approved answer key"
+            >
+              <FileDown className="w-4 h-4" /> Save as PDF
+            </Button>
+          )}
           <Button
             variant="primary"
             loading={approveMut.isPending}
