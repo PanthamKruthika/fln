@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { toast } from "react-hot-toast";
 import {
   Upload, Wand2, FileText, Sparkles, Loader2, X, FileImage,
-  FileCheck2, ChevronRight, Clock, Edit,
+  FileCheck2, ChevronRight, Clock, Edit, FileDown,
 } from "lucide-react";
 import Button from "../../components/ui/Button";
 import Input from "../../components/ui/Input";
@@ -15,6 +15,7 @@ import Card from "../../components/ui/Card";
 import Badge from "../../components/ui/Badge";
 import StatusChip from "../../components/ui/StatusChip";
 import assessmentApi from "../../services/assessmentApi";
+import { exportAnswerKeyPdf } from "../../utils/exportAnswerKeyPdf";
 import type { CreateAssessmentDTO } from "../../services/assessmentApi";
 import type { Assessment } from "../../types/assessment";
 import {
@@ -122,6 +123,34 @@ export default function AssessmentsListPage() {
                     >
                       <Edit className="w-3 h-3" /> Edit
                     </Button>
+                    {a.templateStatus === "Approved" && tpl && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        title="Download printable PDF of the approved answer key"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          try {
+                            exportAnswerKeyPdf({
+                              assessmentCode: a.assessmentCode || tpl.assessmentCode || "AS0000",
+                              title: a.title,
+                              grade: a.grade || "—",
+                              subject: a.subject || "—",
+                              setNumber: a.setNumber,
+                              status: tpl.status || "Approved",
+                              totalMarks: tpl.totalMarks || 0,
+                              questions: tpl.questions || [],
+                              approvedAt: tpl.verifiedAt,
+                            });
+                            toast.success("Answer key PDF downloaded ✓");
+                          } catch (err: any) {
+                            toast.error(`PDF export failed: ${err.message}`);
+                          }
+                        }}
+                      >
+                        <FileDown className="w-3 h-3" /> Save as PDF
+                      </Button>
+                    )}
                   </div>
                 </div>
               );
