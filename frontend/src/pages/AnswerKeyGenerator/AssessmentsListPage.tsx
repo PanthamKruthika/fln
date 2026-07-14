@@ -15,6 +15,7 @@ import Card from "../../components/ui/Card";
 import Badge from "../../components/ui/Badge";
 import StatusChip from "../../components/ui/StatusChip";
 import assessmentApi from "../../services/assessmentApi";
+import type { AssessmentTemplate } from "../../types/assessment";
 import { exportAnswerKeyPdf } from "../../utils/exportAnswerKeyPdf";
 import type { CreateAssessmentDTO } from "../../services/assessmentApi";
 import type { Assessment } from "../../types/assessment";
@@ -32,6 +33,7 @@ export default function AssessmentsListPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
+  const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
 
   // Load existing assessments to show as recent templates
   const { data: assessments, isLoading } = useQuery({
@@ -68,6 +70,36 @@ export default function AssessmentsListPage() {
       setProgress(0);
     },
   });
+
+  async function handleDownloadPdf(a: Assessment) {
+    const tpl = a.templateId && typeof a.templateId === "object" ? (a.templateId as any) : null;
+    if (!tpl) {
+      toast.error("No template data available");
+      return;
+    }
+    setPdfLoadingId(a._id);
+    try {
+      // Always fetch the full template to get the questions array
+      const res = await assessmentApi.getTemplate(a._id);
+      const fullTpl: AssessmentTemplate = res.data.template;
+      exportAnswerKeyPdf({
+        assessmentCode: a.assessmentCode || fullTpl.assessmentCode || "AS0000",
+        title: a.title,
+        grade: a.grade || "—",
+        subject: a.subject || "—",
+        setNumber: a.setNumber,
+        status: fullTpl.status || "Approved",
+        totalMarks: fullTpl.totalMarks || 0,
+        questions: fullTpl.questions || [],
+        approvedAt: fullTpl.verifiedAt,
+      });
+      toast.success("Answer key PDF downloaded ✓");
+    } catch (err: any) {
+      toast.error(`PDF export failed: ${err.message || "Unknown error"}`);
+    } finally {
+      setPdfLoadingId(null);
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -128,24 +160,10 @@ export default function AssessmentsListPage() {
                         size="sm"
                         variant="outline"
                         title="Download printable PDF of the approved answer key"
+                        loading={pdfLoadingId === a._id}
                         onClick={(e) => {
                           e.stopPropagation();
-                          try {
-                            exportAnswerKeyPdf({
-                              assessmentCode: a.assessmentCode || tpl.assessmentCode || "AS0000",
-                              title: a.title,
-                              grade: a.grade || "—",
-                              subject: a.subject || "—",
-                              setNumber: a.setNumber,
-                              status: tpl.status || "Approved",
-                              totalMarks: tpl.totalMarks || 0,
-                              questions: tpl.questions || [],
-                              approvedAt: tpl.verifiedAt,
-                            });
-                            toast.success("Answer key PDF downloaded ✓");
-                          } catch (err: any) {
-                            toast.error(`PDF export failed: ${err.message}`);
-                          }
+                          handleDownloadPdf(a);
                         }}
                       >
                         <FileDown className="w-3 h-3" /> Save as PDF
