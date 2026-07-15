@@ -1,12 +1,12 @@
 import { useAuth } from "../../contexts/AuthContext";
-import { Mail, Phone, MapPin, Calendar, Shield, Edit, LogOut } from "lucide-react";
+import { Mail, Phone, MapPin, Calendar, Shield, Edit } from "lucide-react";
 import PageHeader from "../../components/ui/PageHeader";
 import Card from "../../components/ui/Card";
 import Button from "../../components/ui/Button";
 import Badge from "../../components/ui/Badge";
 
 export default function ProfilePage() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   return (
     <div className="space-y-5">
       <PageHeader title="My Profile" actions={<Button variant="secondary"><Edit className="w-4 h-4" /> Edit Profile</Button>} />
@@ -27,7 +27,6 @@ export default function ProfilePage() {
                 <Badge tone="green" withDot>Active</Badge>
               </div>
             </div>
-            <Button variant="danger" onClick={logout}><LogOut className="w-4 h-4" /> Logout</Button>
           </div>
         </div>
       </Card>

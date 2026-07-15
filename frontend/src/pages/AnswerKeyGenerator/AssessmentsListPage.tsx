@@ -91,7 +91,7 @@ export default function AssessmentsListPage() {
         status: fullTpl.status || "Approved",
         totalMarks: fullTpl.totalMarks || 0,
         questions: fullTpl.questions || [],
-        approvedAt: fullTpl.verifiedAt,
+        approvedAt: fullTpl.verifiedAt || undefined,
       });
       toast.success("Answer key PDF downloaded ✓");
     } catch (err: any) {

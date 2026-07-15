@@ -18,48 +18,29 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+const MOCK_USER: AuthUser = {
+  id: "mock-super-admin-id",
+  firstName: "Super",
+  lastName: "Admin",
+  email: "superadmin@fln.org",
+  role: "superadmin"
+};
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(() => {
-    try {
-      const raw = localStorage.getItem("fln_user");
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  });
-  const [loading, setLoading] = useState(false);
+  const [user, setUser] = useState<AuthUser | null>(MOCK_USER);
+  const [loading] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem("fln_token");
-    if (!token || user) return;
-    api.get("/auth/me").then(
-      (r) => {
-        setUser(r.data.user);
-        localStorage.setItem("fln_user", JSON.stringify(r.data.user));
-      },
-      () => {
-        localStorage.removeItem("fln_token");
-        localStorage.removeItem("fln_user");
-      }
-    );
+    localStorage.setItem("fln_token", "mock-token");
+    localStorage.setItem("fln_user", JSON.stringify(MOCK_USER));
   }, []);
 
   async function login(email: string, password: string, role: string) {
-    setLoading(true);
-    try {
-      const { data } = await api.post("/auth/login", { email, password, role });
-      localStorage.setItem("fln_token", data.token);
-      localStorage.setItem("fln_user", JSON.stringify(data.user));
-      setUser(data.user);
-    } finally {
-      setLoading(false);
-    }
+    setUser(MOCK_USER);
   }
 
   function logout() {
-    localStorage.removeItem("fln_token");
-    localStorage.removeItem("fln_user");
-    setUser(null);
+    // No-op when login is disabled
   }
 
   return (

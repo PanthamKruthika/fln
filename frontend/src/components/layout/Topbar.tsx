@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Bell, Sun, Moon, ChevronDown, LogOut, User, Settings, ShieldCheck } from "lucide-react";
+import { Bell, Sun, Moon, ChevronDown, ShieldCheck } from "lucide-react";
 import { useTheme } from "../../contexts/ThemeContext";
 import { useAuth } from "../../contexts/AuthContext";
 
@@ -11,7 +11,7 @@ const NOTIFICATIONS = [
 
 export default function Topbar() {
   const { theme, toggle } = useTheme();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [showNotifs, setShowNotifs] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -151,28 +151,6 @@ export default function Topbar() {
                 <p className="text-[11px] text-blue-100 mt-0.5 truncate">
                   {user?.email || "admin@fln.org"}
                 </p>
-              </div>
-              <div className="py-1">
-                <a
-                  href="/profile"
-                  className="flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-700 hover:bg-slate-50 transition"
-                >
-                  <User className="w-4 h-4 text-slate-400" /> My Profile
-                </a>
-                <a
-                  href="/settings"
-                  className="flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-700 hover:bg-slate-50 transition"
-                >
-                  <Settings className="w-4 h-4 text-slate-400" /> Settings
-                </a>
-              </div>
-              <div className="border-t border-slate-100 py-1">
-                <button
-                  onClick={logout}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-red-600 hover:bg-red-50 transition font-medium"
-                >
-                  <LogOut className="w-4 h-4" /> Logout
-                </button>
               </div>
             </div>
           )}

