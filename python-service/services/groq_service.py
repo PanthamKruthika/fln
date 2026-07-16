@@ -10,7 +10,7 @@ from utils.logger import get_logger
 
 logger = get_logger("groq-service")
 
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+GROQ_BASE_URL = os.environ.get("LLM_API_BASE_URL", "https://api.groq.com/openai/v1")
 DEFAULT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 SYSTEM_PROMPT = """You are an expert at extracting structured question data from scanned Indian FLN (Foundational Literacy & Numeracy) question papers for grades 1-8.
