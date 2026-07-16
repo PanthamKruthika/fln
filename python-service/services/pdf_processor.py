@@ -8,7 +8,7 @@ from utils.logger import get_logger
 
 logger = get_logger("pdf-processor")
 
-MAX_DIMENSION = 1600
+MAX_DIMENSION = 1000
 JPEG_QUALITY = 85
 
 

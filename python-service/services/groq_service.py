@@ -89,12 +89,26 @@ def _strip_code_fence(text: str) -> str:
 def _extract_json(text: str) -> Optional[Any]:
     text = _strip_code_fence(text)
     try:
-        return json.loads(text)
+        data = json.loads(text)
+        if isinstance(data, dict) and "questions" in data:
+            return data["questions"]
+        return data
     except Exception:
-        m = re.search(r"\[[\s\S]*\]", text)
-        if m:
+        # Try finding array in the text first
+        m_arr = re.search(r"\[[\s\S]*\]", text)
+        if m_arr:
             try:
-                return json.loads(m.group(0))
+                return json.loads(m_arr.group(0))
+            except Exception:
+                pass
+        # Try finding object in the text
+        m_obj = re.search(r"\{[\s\S]*\}", text)
+        if m_obj:
+            try:
+                data = json.loads(m_obj.group(0))
+                if isinstance(data, dict) and "questions" in data:
+                    return data["questions"]
+                return data
             except Exception:
                 pass
     return None
