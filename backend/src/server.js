@@ -42,6 +42,7 @@ app.get("/api/health", (req, res) =>
   res.json({ ok: true, service: "fln-backend", time: new Date().toISOString() })
 );
 
+
 app.use("/api/auth", authRoutes);
 app.use("/api/assessments", assessmentRoutes);
 app.use("/api/templates", templateRoutes);

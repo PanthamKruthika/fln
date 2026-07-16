@@ -5,8 +5,8 @@
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
-    "dev:old": "tsx src/index.ts",
-    "dev:new": "tsx src/server.ts",
+    "dev:old": "PORT=3000 tsx src/index.ts",
+    "dev:new": "PORT=3001 tsx src/server.ts",
     "dev:answerkey": "nodemon src/server.js",
     "dev": "concurrently -n old,new,answerkey -c yellow,cyan,magenta \"npm run dev:old\" \"npm run dev:new\" \"npm run dev:answerkey\"",
     "build": "esbuild src/index.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",

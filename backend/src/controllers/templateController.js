@@ -63,20 +63,20 @@ async function saveTemplate(req, res) {
     const code = parent?.assessmentCode || null;
     const existing = await AnswerKey.findOne({ assessmentId }).sort({ version: -1 });
     let template;
-    if (existing && existing.status !== "Approved") {
+    if (existing) {
       existing.questions = questions;
-      if (status === "Draft") existing.status = "Draft";
+      if (status) existing.status = status;
       if (code && !existing.assessmentCode) existing.assessmentCode = code;
       template = await existing.save();
     } else {
       template = await AnswerKey.create({
         assessmentId,
         questions,
-        status: "Draft",
+        status: status || "Draft",
         generatedBy: req.body.generatedBy || "ai",
         modelName: req.body.modelName || "unknown",
         assessmentCode: code,
-        version: existing ? existing.version + 1 : 1,
+        version: 1,
       });
     }
     const assessment = await Assessment.findById(assessmentId);

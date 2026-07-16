@@ -178,24 +178,28 @@ async function generateTemplate(req, res) {
     try {
       const existing = await AnswerKey.findOne({ assessmentId: id }).sort({ version: -1 });
       let template;
-      if (existing && existing.status !== "Approved") {
+      if (existing) {
         existing.questions = result.questions || [];
         existing.modelName = result.model || "unknown";
+        existing.status = "Draft";
+        if (assessment.assessmentCode && !existing.assessmentCode) {
+          existing.assessmentCode = assessment.assessmentCode;
+        }
         template = await existing.save();
       } else {
         template = await AnswerKey.create({
           assessmentId: id,
-questions: result.questions || [],
-           status: "Draft",
-           generatedBy: "ai",
-           modelName: result.model || "unknown",
-           assessmentCode: assessment.assessmentCode,  // mirror code into answerkey
-           version: existing ? existing.version + 1 : 1,
-         });
-       }
-       assessment.templateId = template._id;
-       assessment.templateStatus = "Draft";
-       await assessment.save();
+          questions: result.questions || [],
+          status: "Draft",
+          generatedBy: "ai",
+          modelName: result.model || "unknown",
+          assessmentCode: assessment.assessmentCode,
+          version: 1,
+        });
+      }
+      assessment.templateId = template._id;
+      assessment.templateStatus = "Draft";
+      await assessment.save();
     } catch (saveErr) {
       console.error("Auto-save template failed (non-fatal):", saveErr.message);
     }

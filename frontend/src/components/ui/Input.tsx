@@ -21,7 +21,7 @@ const Input = forwardRef<HTMLInputElement, Props>(function Input(
         )}
         <input
           ref={ref}
-          className={`input ${leftIcon ? "pl-9" : ""} ${rightIcon ? "pr-9" : ""} ${error ? "border-red-300 focus:ring-red-500/20 focus:border-red-500" : ""} ${className}`}
+          className={`input ${leftIcon ? "!pl-9" : ""} ${rightIcon ? "!pr-9" : ""} ${error ? "border-red-300 focus:ring-red-500/20 focus:border-red-500" : ""} ${className}`}
           {...rest}
         />
         {rightIcon && (

@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { toast } from "react-hot-toast";
 import {
   Upload, Wand2, FileText, Sparkles, Loader2, X, FileImage,
-  FileCheck2, ChevronRight, Clock, Edit, FileDown,
+  FileCheck2, ChevronRight, Clock, Edit, FileDown, Search,
 } from "lucide-react";
 import Button from "../../components/ui/Button";
 import Input from "../../components/ui/Input";
@@ -42,6 +42,9 @@ export default function AssessmentsListPage({ onNavigateToReview }: AssessmentsL
     }
   };
   const [showCreate, setShowCreate] = useState(false);
+  const showCreateRef = useRef(showCreate);
+  showCreateRef.current = showCreate;
+
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
   const [pdfLoadingId, setPdfLoadingId] = useState<string | null>(null);
@@ -52,6 +55,29 @@ export default function AssessmentsListPage({ onNavigateToReview }: AssessmentsL
     queryFn: () => assessmentApi.list().then((r) => r.data.assessments),
     refetchOnWindowFocus: false,
   });
+
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredAssessments = assessments
+    ? assessments.filter((a: Assessment) => {
+        const query = searchQuery.toLowerCase().trim();
+        if (!query) return true;
+
+        const code = (a.assessmentCode || "").toLowerCase();
+        const title = (a.title || "").toLowerCase();
+        const grade = (a.grade || "").toLowerCase();
+        const setNum = (a.setNumber || "").toLowerCase();
+        const subject = (a.subject || "").toLowerCase();
+
+        return (
+          code.includes(query) ||
+          title.includes(query) ||
+          grade.includes(query) ||
+          setNum.includes(query) ||
+          subject.includes(query)
+        );
+      })
+    : [];
 
   const fullMut = useMutation({
     mutationFn: async ({ data, files }: { data: CreateAssessmentDTO; files: File[] }) => {
@@ -69,11 +95,13 @@ export default function AssessmentsListPage({ onNavigateToReview }: AssessmentsL
       return { assessmentId, preview: genRes.data.preview, model: genRes.data.model };
     },
     onSuccess: (data) => {
+      if (!showCreateRef.current) return;
       toast.success("Uploaded & extracted — review the questions");
       setShowCreate(false);
       goToReview(data.assessmentId);
     },
     onError: (e: any) => {
+      if (!showCreateRef.current) return;
       const errorMsg = e.response?.data?.message || e.message || "Something went wrong";
       toast.error(errorMsg, { duration: 8000 });
       setPhase("idle");
@@ -137,65 +165,91 @@ export default function AssessmentsListPage({ onNavigateToReview }: AssessmentsL
         </Button>
       </div>
 
-      {/* Recent Assessments (if any exist) */}
+      {/* Assessments & Answer Keys */}
       {!isLoading && assessments && assessments.length > 0 && (
-        <Card title="Your Recent Assessments" subtitle={`${assessments.length} saved in the database — IDs match student_id + assessment_id for evaluation`}>
-          <div className="divide-y divide-slate-100 -m-5">
-            {assessments.slice(0, 8).map((a: Assessment) => {
-              const tpl = a.templateId && typeof a.templateId === "object" ? a.templateId : null;
-              return (
-                <div
-                  key={a._id}
-                  className="flex items-center gap-4 px-5 py-3 hover:bg-slate-50 transition"
-                >
-                  <div className="px-3 py-2 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 text-white font-mono font-bold text-sm flex-shrink-0">
-                    {a.assessmentCode || "AS????"}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-slate-900 truncate">{a.title}</p>
-                    <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500">
-                      <Badge tone="blue">{a.grade}</Badge>
-                      {a.setNumber && <Badge tone="purple">{a.setNumber}</Badge>}
-                      <Badge tone="slate">{a.subject}</Badge>
-                      <span className="flex items-center gap-0.5">
-                        <Clock className="w-2.5 h-2.5" />
-                        {a.createdAt ? new Date(a.createdAt).toLocaleDateString() : "—"}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 flex-shrink-0">
-                    <StatusChip status={a.templateStatus} />
-                    {tpl && (
-                      <span className="text-xs text-slate-600 hidden sm:inline">
-                        {tpl.totalQuestions ?? 0}Q · {tpl.totalMarks ?? 0}M
-                      </span>
-                    )}
-                    <Button
-                      size="sm"
-                      onClick={() => goToReview(a._id!)}
-                    >
-                      <Edit className="w-3 h-3" /> Edit
-                    </Button>
-                    {a.templateStatus === "Approved" && tpl && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        title="Download printable PDF of the approved answer key"
-                        loading={pdfLoadingId === a._id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDownloadPdf(a);
-                        }}
-                      >
-                        <FileDown className="w-3 h-3" /> Save as PDF
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+            <div className="flex-1">
+              <Input
+                placeholder="Search assessments by class, set, assessment code, subject, or title..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                leftIcon={<Search className="w-4 h-4 text-slate-400" />}
+              />
+            </div>
           </div>
-        </Card>
+
+          <Card
+            title="Assessments & Answer Keys"
+            subtitle={
+              searchQuery
+                ? `Showing ${filteredAssessments.length} of ${assessments.length} matching assessments`
+                : `${assessments.length} saved in the database — IDs match student_id + assessment_id for evaluation`
+            }
+          >
+            {filteredAssessments.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-sm text-slate-500">No assessments found matching "{searchQuery}"</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100 -m-5">
+                {filteredAssessments.map((a: Assessment) => {
+                  const tpl = a.templateId && typeof a.templateId === "object" ? a.templateId : null;
+                  return (
+                    <div
+                      key={a._id}
+                      className="flex items-center gap-4 px-5 py-3 hover:bg-slate-50 transition"
+                    >
+                      <div className="px-3 py-2 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 text-white font-mono font-bold text-sm flex-shrink-0">
+                        {a.assessmentCode || "AS????"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-slate-900 truncate">{a.title}</p>
+                        <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500">
+                          <Badge tone="blue">{a.grade}</Badge>
+                          {a.setNumber && <Badge tone="purple">{a.setNumber}</Badge>}
+                          <Badge tone="slate">{a.subject}</Badge>
+                          <span className="flex items-center gap-0.5">
+                            <Clock className="w-2.5 h-2.5" />
+                            {a.createdAt ? new Date(a.createdAt).toLocaleDateString() : "—"}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <StatusChip status={a.templateStatus} />
+                        {tpl && (
+                          <span className="text-xs text-slate-600 hidden sm:inline">
+                            {tpl.totalQuestions ?? 0}Q · {tpl.totalMarks ?? 0}M
+                          </span>
+                        )}
+                        <Button
+                          size="sm"
+                          onClick={() => goToReview(a._id!)}
+                        >
+                          <Edit className="w-3 h-3" /> Edit
+                        </Button>
+                        {a.templateStatus === "Approved" && tpl && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            title="Download printable PDF of the approved answer key"
+                            loading={pdfLoadingId === a._id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDownloadPdf(a);
+                            }}
+                          >
+                            <FileDown className="w-3 h-3" /> Save as PDF
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        </div>
       )}
 
       {/* Empty-state CTA — shown when no assessments exist */}
@@ -240,7 +294,12 @@ export default function AssessmentsListPage({ onNavigateToReview }: AssessmentsL
       {/* Create Modal */}
       <CreateAssessmentModal
         open={showCreate}
-        onClose={() => phase === "idle" && setShowCreate(false)}
+        onClose={() => {
+          setShowCreate(false);
+          setPhase("idle");
+          setProgress(0);
+          fullMut.reset();
+        }}
         loading={fullMut.isPending}
         phase={phase}
         progress={progress}

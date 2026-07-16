@@ -10,8 +10,8 @@ from utils.logger import get_logger
 
 logger = get_logger("groq-service")
 
-GROQ_BASE_URL = os.environ.get("LLM_API_BASE_URL", "https://api.groq.com/openai/v1")
-DEFAULT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_BASE_URL = os.environ.get("LLM_API_BASE_URL", "http://127.0.0.1:11434/v1")
+DEFAULT_MODEL = "qwen2.5vl:7b"
 
 SYSTEM_PROMPT = """You are an expert at extracting structured question data from scanned Indian FLN (Foundational Literacy & Numeracy) question papers for grades 1-8.
 
@@ -167,15 +167,13 @@ _client: Optional[OpenAI] = None
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            raise RuntimeError("GROQ_API_KEY not set")
+        api_key = os.environ.get("GROQ_API_KEY", "ollama")
         _client = OpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
     return _client
 
 
 def is_configured() -> bool:
-    return bool(os.environ.get("GROQ_API_KEY"))
+    return True
 
 
 def get_model() -> str:
