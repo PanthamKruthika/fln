@@ -1,4 +1,24 @@
+# Archive and outputs
+archive/
+mvp/
+output/
+
+# Node
 node_modules/
+
+# Build outputs
+dist/
+backend/dist/
+frontend/dist/
+
+# Backend data (local seed files)
+backend/data/
+
+# Environment / secrets
 .env
 *.log
+
+# Misc
+.vscode/
+.idea/
 .DS_Store
