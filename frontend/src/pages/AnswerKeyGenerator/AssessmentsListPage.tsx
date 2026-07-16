@@ -73,8 +73,9 @@ export default function AssessmentsListPage({ onNavigateToReview }: AssessmentsL
       setShowCreate(false);
       goToReview(data.assessmentId);
     },
-    onError: (e: Error) => {
-      toast.error(e.message || "Something went wrong");
+    onError: (e: any) => {
+      const errorMsg = e.response?.data?.message || e.message || "Something went wrong";
+      toast.error(errorMsg, { duration: 8000 });
       setPhase("idle");
       setProgress(0);
     },

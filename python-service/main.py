@@ -313,7 +313,14 @@ def generate_template(req: GenerateTemplateRequest):
 
     except Exception as e:
         logger.exception(f"Template generation failed: {e}")
-        return _mock_with_label(req.assessmentId, "mock (error)")
+        err_msg = str(e)
+        if "Connection refused" in err_msg or "11434" in err_msg or "ConnectionError" in err_msg:
+            detail = "Ollama is not running locally. Please start the Ollama server on your machine."
+        elif "not found" in err_msg.lower() or "404" in err_msg:
+            detail = f"Model '{model_name}' is not installed in Ollama. Please run 'ollama pull {model_name}' in your terminal."
+        else:
+            detail = f"AI Generation Error: {err_msg}"
+        raise HTTPException(status_code=500, detail=detail)
 
 
 def _attach_images_to_questions(questions, pictures_by_page, images_by_source, is_image_mode, saved_page_paths=None):

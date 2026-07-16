@@ -211,8 +211,9 @@ questions: result.questions || [],
     const processingTime = (Date.now() - t0) / 1000;
     assessment.templateStatus = "Pending";
     await assessment.save();
-    await auditLog.logFailure(id, modelName, err.message, processingTime);
-    return res.status(500).json({ message: err.message });
+    const errorMessage = err.response?.data?.detail || err.message;
+    await auditLog.logFailure(id, modelName, errorMessage, processingTime);
+    return res.status(500).json({ message: errorMessage });
   }
 }
 

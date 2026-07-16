@@ -172,4 +172,4 @@ def analyze_page(image_bytes: bytes, page_number: int, metadata: Dict[str, Any] 
         return data
     except Exception as e:
         logger.exception(f"Groq error on page {page_number}: {e}")
-        return []
+        raise e
