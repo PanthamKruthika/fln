@@ -31,19 +31,16 @@ For each question visible on the page, output a JSON object with EXACTLY these f
   "evaluationRule": "<exact | contains | tolerance | range | subjective | manual>",
   "visualDescription": "<short description of any picture/image/diagram referenced by this question, or empty string>",
   "hasImage": <true if the question references an image/picture/diagram that must be displayed to the student, else false>,
-  "boundingBox": { "x": <0.0-1.0>, "y": <0.0-1.0>, "width": <0.0-1.0>, "height": <0.0-1.0> }
+  "boundingBox": { "ymin": <0-1000>, "xmin": <0-1000>, "ymax": <0-1000>, "xmax": <0-1000> }
 }
 
-**CRITICAL — boundingBox must be NORMALIZED (0.0 to 1.0) coordinates relative to the page image:**
-- x = fraction from the LEFT edge of the page (0.0 = leftmost, 1.0 = rightmost)
-- y = fraction from the TOP edge of the page (0.0 = topmost, 1.0 = bottommost)
-- width = fraction of total page width
-- height = fraction of total page height
-- The bounding box must tightly enclose JUST this question's text, image, and answer space
-- DO NOT return 0,0,0,0 — always give real coordinates
-- If the question spans multiple lines, include all of them in the bbox
-- Example: a question in the middle of a page might have bbox {x:0.1, y:0.4, width:0.8, height:0.15}
-- The bbox will be used to crop the page image and show ONLY this question's region to the student
+**CRITICAL — boundingBox coordinates MUST be integers in the 0 to 1000 range relative to the page image (ymin, xmin, ymax, xmax):**
+- ymin = distance from the TOP edge of the page (0 = topmost, 1000 = bottommost)
+- xmin = distance from the LEFT edge of the page (0 = leftmost, 1000 = rightmost)
+- ymax = distance from the TOP edge of the page (0 = topmost, 1000 = bottommost)
+- xmax = distance from the LEFT edge of the page (0 = leftmost, 1000 = rightmost)
+- Be very precise! Do not estimate simple large boxes. Draw a tight crop box around JUST this question's text, pictures, and lines.
+- Example: a question occupying the top quarter might be {"ymin": 50, "xmin": 80, "ymax": 300, "xmax": 920}
 
 **STRICT answer generation rules — ALWAYS provide an answer:**
 1. For math/arithmetic/computation: COMPUTE the answer yourself. Examples:
@@ -53,23 +50,22 @@ For each question visible on the page, output a JSON object with EXACTLY these f
 2. For MCQs: pick the right option letter AND its text (e.g., "C) 8").
 3. For fill-in-the-blank factual questions: provide the standard fact.
 4. For reading comprehension with no visible answer: write a 1-line model answer.
-5. For counting questions with a picture: count the visible items and write the number.
+5. For counting questions with a picture: count the visible items and write the number (e.g. "5").
 6. For "What comes next" sequence questions: state the next item.
 7. For vocabulary/spelling questions: provide the correct word.
-8. For "Match the following": provide the most obvious pairing.
-9. **For VISUAL questions (counting objects, identifying shapes, reading from diagrams)**:
-   - Look carefully at the image and provide YOUR BEST ANSWER as text/number.
-   - Example: "Count the apples" → "5"
-   - Example: "What color is the biggest shape?" → "Red"
-   - Example: "Which shape is a triangle?" → "Triangle"
-   - DO NOT leave these blank — give a specific answer.
-10. **ONLY leave correctAnswer empty for truly subjective tasks**:
+8. For "Match the following": always provide the correct pairs separated by commas (e.g., "Apple - Red, Banana - Yellow" or "Triangle - Pizza, Circle - Clock").
+9. For visual selection/Circle the group/Most/Least: specify the correct group name or count (e.g. "Group A" or "5").
+10. **For VISUAL questions (counting objects, identifying shapes, reading from diagrams)**:
+    - Look carefully at the image and provide YOUR BEST ANSWER as text/number.
+    - Example: "Circle all the ₹1 coins" → "3" (if there are three ₹1 coins).
+    - Example: "What color is the biggest shape?" → "Red"
+    - DO NOT leave these blank — give a specific answer.
+11. **ONLY leave correctAnswer empty for subjective/artistic tasks**:
     - Drawing (kid draws something)
     - Trace (kid traces a letter)
-    - "Write a story about..."
     - "Draw your family"
     For these, set evaluationRule = "manual". This is the ONLY case where correctAnswer can be empty.
-11. **SHORT ANSWERS ARE VALID** — "5", "T", "9", "B", "east", etc. are all good answers. Do NOT second-guess short answers.
+12. **SHORT ANSWERS ARE VALID** — "5", "T", "9", "B", "east", etc. are all good answers. Do NOT second-guess short answers.
 
 **visualDescription rules:**
 - If the question mentions a picture, image, diagram, or refers to something visual: write a short description like "Picture of 5 stars to count" or "Diagram of a circle to label".
@@ -112,6 +108,57 @@ def _extract_json(text: str) -> Optional[Any]:
             except Exception:
                 pass
     return None
+
+
+def convert_bbox(bbox: Any) -> Dict[str, float]:
+    if not isinstance(bbox, dict):
+        return {"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0}
+    
+    # If already in x/y/width/height format, keep it
+    if "x" in bbox and "y" in bbox and "width" in bbox and "height" in bbox:
+        try:
+            return {
+                "x": round(float(bbox.get("x", 0)), 3),
+                "y": round(float(bbox.get("y", 0)), 3),
+                "width": round(float(bbox.get("width", 0)), 3),
+                "height": round(float(bbox.get("height", 0)), 3)
+            }
+        except Exception:
+            pass
+
+    # Extract coordinates
+    try:
+        ymin = float(bbox.get("ymin", 0))
+        xmin = float(bbox.get("xmin", 0))
+        ymax = float(bbox.get("ymax", 0))
+        xmax = float(bbox.get("xmax", 0))
+    except Exception:
+        return {"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0}
+
+    # Normalize from 0-1000 scale to 0.0-1.0 scale if needed
+    if ymin > 1 or xmin > 1 or ymax > 1 or xmax > 1:
+        ymin /= 1000.0
+        xmin /= 1000.0
+        ymax /= 1000.0
+        xmax /= 1000.0
+
+    # Ensure bounds [0, 1]
+    ymin = max(0.0, min(1.0, ymin))
+    xmin = max(0.0, min(1.0, xmin))
+    ymax = max(0.0, min(1.0, ymax))
+    xmax = max(0.0, min(1.0, xmax))
+
+    x = xmin
+    y = ymin
+    width = max(0.01, xmax - xmin)
+    height = max(0.01, ymax - ymin)
+
+    return {
+        "x": round(x, 3),
+        "y": round(y, 3),
+        "width": round(width, 3),
+        "height": round(height, 3)
+    }
 
 
 _client: Optional[OpenAI] = None
@@ -183,6 +230,8 @@ def analyze_page(image_bytes: bytes, page_number: int, metadata: Dict[str, Any] 
         for q in data:
             q["pageNumber"] = page_number  # ALWAYS use the actual page number, not AI's guess
             q["sourceFileIndex"] = metadata.get("sourceFileIndex", page_number) if metadata else page_number
+            if "boundingBox" in q:
+                q["boundingBox"] = convert_bbox(q["boundingBox"])
         return data
     except Exception as e:
         logger.exception(f"Groq error on page {page_number}: {e}")
