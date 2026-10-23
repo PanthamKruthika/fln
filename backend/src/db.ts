@@ -181,6 +181,7 @@ export interface Question {
   question_id: string;
   question: string;
   answer: string;
+  alternateAnswers?: string[];
   answer_type: 'text' | 'number' | 'choice';
   choices?: string[];
   /** Optional mapping from an exact choice string to its error tag. */
@@ -5658,6 +5659,18 @@ export class DBStore {
         description: 'Unable to generate diagnostic worksheets for students at GPS Rural Village Moga. Access restricted.',
         status: 'Open',
         createdAt: '2026-07-06T09:15:00Z'
+      },
+      {
+        id: 'tkt_dispute_1',
+        userId: 'u6',
+        userEmail: 'gps-mt-001.t01@fln.org',
+        userName: 'Ritu Sharma',
+        userRole: UserRole.TEACHER,
+        type: 'curriculum',
+        subject: 'Dispute: Question C2_ADD_01 scoring marked 12 wrong for 7 + 5',
+        description: 'Student submitted answer 12 for C2_ADD_01 (7 + 5) but OCR evaluator flagged it wrong because answer key expected 13 due to a typo. Please correct the answer key.',
+        status: 'Open',
+        createdAt: '2026-07-06T10:00:00Z'
       }
     ];
 
@@ -5790,6 +5803,181 @@ export class DBStore {
       }
     ];
 
+    const seedDiagnosticAnswerKeys: DiagnosticAnswerKey[] = [
+      {
+        id: 'dak_c2_set1',
+        jobId: 'diag_job_demo_c2',
+        studentId: 's2',
+        studentName: 'Jasmine Kaur',
+        classNumber: 2,
+        setNumber: 1,
+        masterJson: { title: 'Class 2 Diagnostic' },
+        coords: {},
+        questionPaperJson: { totalMarks: 20 },
+        createdAt: '2026-07-06T10:00:00Z',
+        questions: [
+          {
+            question_id: 'C2_COUNT_01',
+            question: 'Count the apples in the box and write the number.',
+            answer: '7',
+            answer_type: 'number',
+            topic: 'Counting & Number Sense',
+            subtopic: 'Objects 1-10',
+            difficulty: 'easy',
+            source_level: 20,
+          },
+          {
+            question_id: 'C2_COMPARE_01',
+            question: 'Fill in the box with <, >, or = : 8 [ ] 5',
+            answer: '>',
+            answer_type: 'choice',
+            choices: ['<', '>', '='],
+            topic: 'Comparison',
+            subtopic: 'Single Digit Comparison',
+            difficulty: 'medium',
+            source_level: 20,
+          },
+          {
+            question_id: 'C2_ADD_01',
+            question: 'Add and write the sum: 7 + 5 = [ ]',
+            answer: '13',
+            answer_type: 'number',
+            topic: 'Addition',
+            subtopic: 'Addition within 20',
+            difficulty: 'medium',
+            source_level: 20,
+          },
+          {
+            question_id: 'C2_SUB_01',
+            question: 'Subtract: 9 - 4 = [ ]',
+            answer: '5',
+            answer_type: 'number',
+            topic: 'Subtraction',
+            subtopic: 'Single Digit Subtraction',
+            difficulty: 'easy',
+            source_level: 20,
+          },
+          {
+            question_id: 'C2_SHAPES_01',
+            question: 'Identify the shape with 3 sides.',
+            answer: 'Triangle',
+            alternateAnswers: ['triangle', 'TRIANGLE'],
+            answer_type: 'choice',
+            choices: ['Circle', 'Square', 'Triangle'],
+            topic: 'Shapes & Spatial Understanding',
+            subtopic: '2D Shapes',
+            difficulty: 'easy',
+            source_level: 20,
+          }
+        ],
+        answerKey: [
+          { qid: 'C2_COUNT_01', question_id: 'C2_COUNT_01', answer: '7', type: 'graded' },
+          { qid: 'C2_COMPARE_01', question_id: 'C2_COMPARE_01', answer: '>', type: 'graded' },
+          { qid: 'C2_ADD_01', question_id: 'C2_ADD_01', answer: '13', type: 'graded' },
+          { qid: 'C2_SUB_01', question_id: 'C2_SUB_01', answer: '5', type: 'graded' },
+          { qid: 'C2_SHAPES_01', question_id: 'C2_SHAPES_01', answer: 'Triangle', type: 'graded' }
+        ],
+        answerRegions: [
+          { question_id: 'C2_COUNT_01', page: 1, x_mm: 20, y_mm: 60, w_mm: 30, h_mm: 15 },
+          { question_id: 'C2_COMPARE_01', page: 1, x_mm: 20, y_mm: 90, w_mm: 25, h_mm: 15 },
+          { question_id: 'C2_ADD_01', page: 1, x_mm: 20, y_mm: 120, w_mm: 30, h_mm: 15 },
+          { question_id: 'C2_SUB_01', page: 1, x_mm: 20, y_mm: 150, w_mm: 30, h_mm: 15 },
+          { question_id: 'C2_SHAPES_01', page: 1, x_mm: 20, y_mm: 180, w_mm: 35, h_mm: 15 }
+        ]
+      },
+      {
+        id: 'dak_c3_set1',
+        jobId: 'diag_job_demo_c3',
+        studentId: 's19',
+        studentName: 'Rohan Das',
+        classNumber: 3,
+        setNumber: 1,
+        masterJson: { title: 'Class 3 Diagnostic' },
+        coords: {},
+        questionPaperJson: { totalMarks: 25 },
+        createdAt: '2026-07-06T10:30:00Z',
+        questions: [
+          {
+            question_id: 'C3_PLACE_01',
+            question: 'What is the place value of 8 in 384?',
+            answer: '80',
+            alternateAnswers: ['eighty', 'tens', '8 tens'],
+            answer_type: 'number',
+            topic: 'Place Value',
+            subtopic: '3-digit numbers',
+            difficulty: 'medium',
+            source_level: 30,
+          },
+          {
+            question_id: 'C3_MULT_01',
+            question: 'Multiply: 6 x 4 = [ ]',
+            answer: '24',
+            answer_type: 'number',
+            topic: 'Multiplication',
+            subtopic: 'Basic Tables',
+            difficulty: 'easy',
+            source_level: 30,
+          },
+          {
+            question_id: 'C3_FRACTION_01',
+            question: 'What fraction of the circle is shaded (half)?',
+            answer: '1/2',
+            alternateAnswers: ['0.5', 'half', 'Half'],
+            answer_type: 'text',
+            topic: 'Fractions',
+            subtopic: 'Visual Halves',
+            difficulty: 'medium',
+            source_level: 30,
+          }
+        ],
+        answerKey: [
+          { qid: 'C3_PLACE_01', question_id: 'C3_PLACE_01', answer: '80', type: 'graded' },
+          { qid: 'C3_MULT_01', question_id: 'C3_MULT_01', answer: '24', type: 'graded' },
+          { qid: 'C3_FRACTION_01', question_id: 'C3_FRACTION_01', answer: '1/2', type: 'graded' }
+        ]
+      },
+      {
+        id: 'dak_c1_set1',
+        jobId: 'diag_job_demo_c1',
+        studentId: 's7',
+        studentName: 'Simran Kaur',
+        classNumber: 1,
+        setNumber: 1,
+        masterJson: { title: 'Class 1 Diagnostic' },
+        coords: {},
+        questionPaperJson: { totalMarks: 15 },
+        createdAt: '2026-07-06T09:00:00Z',
+        questions: [
+          {
+            question_id: 'C1_RECOG_01',
+            question: 'Identify the number: 5',
+            answer: '5',
+            alternateAnswers: ['five'],
+            answer_type: 'number',
+            topic: 'Number Recognition',
+            subtopic: 'Numbers 1-9',
+            difficulty: 'easy',
+            source_level: 10,
+          },
+          {
+            question_id: 'C1_COUNT_01',
+            question: 'Count the stars: ★★★',
+            answer: '3',
+            alternateAnswers: ['three'],
+            answer_type: 'number',
+            topic: 'Counting',
+            subtopic: 'Objects 1-5',
+            difficulty: 'easy',
+            source_level: 10,
+          }
+        ],
+        answerKey: [
+          { qid: 'C1_RECOG_01', question_id: 'C1_RECOG_01', answer: '5', type: 'graded' },
+          { qid: 'C1_COUNT_01', question_id: 'C1_COUNT_01', answer: '3', type: 'graded' }
+        ]
+      }
+    ];
+
     const bestPractices: BestPractice[] = [
       {
         id: 'bp1',
@@ -5827,7 +6015,7 @@ export class DBStore {
       announcements,
       interventions,
       bestPractices,
-      diagnosticAnswerKeys: [],
+      diagnosticAnswerKeys: seedDiagnosticAnswerKeys,
       certifications: [],
       competencyRequirements: getSeedCompetencyRequirements(),
       misconceptionClusters: [],
