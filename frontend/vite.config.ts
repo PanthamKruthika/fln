@@ -19,10 +19,6 @@ export default defineConfig(() => {
       },
       port: 5173,
       proxy: {
-        '/api/assessments': { target: 'http://127.0.0.1:5000', changeOrigin: true },
-        '/api/templates': { target: 'http://127.0.0.1:5000', changeOrigin: true },
-        '/uploads': { target: 'http://127.0.0.1:5000', changeOrigin: true },
-        '/extracted-images': { target: 'http://127.0.0.1:5000', changeOrigin: true },
         '/api': { target: process.env.VITE_API_TARGET || 'http://localhost:3000', changeOrigin: true },
         '/output': { target: process.env.VITE_API_TARGET || 'http://localhost:3000', changeOrigin: true },
         '/worksheets': { target: process.env.VITE_API_TARGET || 'http://localhost:3000', changeOrigin: true },

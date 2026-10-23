@@ -222,6 +222,7 @@ export const Layout: React.FC<LayoutProps> = ({
         list.push({ name: 'Districts', view: 'districts', icon: MapPin });
         list.push({ name: 'Analytics', view: 'analytics', icon: BarChart3 });
         list.push({ name: 'Question Bank', view: 'question_bank', icon: Database });
+        list.push({ name: 'Answer Key Corrections', view: 'answer_key', icon: KeyRound });
         list.push({ name: 'Aadhaar Reveal', view: 'aadhaar_reveal', icon: ShieldCheck });
         list.push({ name: 'Security', view: 'security', icon: KeyRound });
         list.push({ name: 'Certification Reviews', view: 'certification_reviews', icon: Award });
@@ -233,12 +234,12 @@ export const Layout: React.FC<LayoutProps> = ({
         list.push({ name: 'Worksheet Templates', view: 'worksheet_templates', icon: ClipboardList });
         list.push({ name: 'Content', view: 'content', icon: BookOpen });
         list.push({ name: 'Question Bank', view: 'question_bank', icon: Database });
+        list.push({ name: 'Answer Key Corrections', view: 'answer_key', icon: KeyRound });
         list.push({ name: 'Analytics', view: 'analytics', icon: BarChart3 });
         list.push({ name: 'System Settings', view: 'system_settings', icon: Settings });
         list.push({ name: 'Aadhaar Reveal', view: 'aadhaar_reveal', icon: ShieldCheck });
         list.push({ name: 'Security', view: 'security', icon: KeyRound });
         list.push({ name: 'Audit Logs', view: 'logbook', icon: ShieldCheck });
-        list.push({ name: 'Answer Key', view: 'answer_key', icon: KeyRound });
         list.push({ name: 'Certification Reviews', view: 'certification_reviews', icon: Award });
         break;
     }

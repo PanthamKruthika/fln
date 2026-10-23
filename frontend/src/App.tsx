@@ -22,7 +22,7 @@ import { LogbookView } from './components/LogbookView';
 import { TicketSubmission } from './components/TicketSubmission';
 import { AssessmentCalendar } from './components/AssessmentCalendar';
 import { PanelViews } from './components/PanelViews';
-import AnswerKeyPanel from './pages/AnswerKeyGenerator/AnswerKeyPanel';
+import { AnswerKeyEditorPanel } from './components/panels/AnswerKeyEditorPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import MisconceptionFingerprint from './components/MisconceptionFingerprint';
 import { Bell, Settings, ShieldCheck } from 'lucide-react';
@@ -259,7 +259,7 @@ export default function App() {
                 {activePanel === 'logbook' && <LogbookView token={token} user={currentUser} />}
                 {activePanel === 'tickets' && <TicketSubmission token={token} userRole={currentUser.role as UserRole} />}
                 {activePanel === 'calendar' && <AssessmentCalendar />}
-                {activePanel === 'answer_key' && <AnswerKeyPanel token={token} />}
+                {activePanel === 'answer_key' && <AnswerKeyEditorPanel token={token || undefined} />}
                 {activePanel === 'misconceptions' && <MisconceptionFingerprint token={token} />}
 
                 {activePanel === 'settings' && (

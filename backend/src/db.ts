@@ -249,6 +249,16 @@ export interface DiagnosticAnswerKey {
     h_mm: number;
   }>;
   createdAt: string;
+  correctionHistory?: Array<{
+    questionId: string;
+    oldAnswer: string;
+    newAnswer: string;
+    alternateAnswers?: string[];
+    reason: string;
+    regradedCount?: number;
+    updatedBy: string;
+    updatedAt: string;
+  }>;
 }
 
 export interface LevelHtmlTemplate {
@@ -3794,6 +3804,159 @@ export class DBStore {
         .filter(k => k.classNumber === classNumber)
         .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
       return keys[0] || null;
+    }
+
+    async getAllDiagnosticAnswerKeys(filters?: { classNumber?: number; setNumber?: number; studentId?: string; search?: string }): Promise<DiagnosticAnswerKey[]> {
+      let keys: DiagnosticAnswerKey[] = [];
+      if (this.mongoDb) {
+        const q: any = {};
+        if (filters?.classNumber) q.classNumber = filters.classNumber;
+        if (filters?.setNumber) q.setNumber = filters.setNumber;
+        if (filters?.studentId) q.studentId = filters.studentId;
+        keys = await this.mongoDb.collection<DiagnosticAnswerKey>('diagnostic_answer_keys').find(q).sort({ createdAt: -1 }).toArray();
+      } else {
+        keys = [...(this.data?.diagnosticAnswerKeys || [])];
+        if (filters?.classNumber) keys = keys.filter(k => k.classNumber === filters.classNumber);
+        if (filters?.setNumber) keys = keys.filter(k => k.setNumber === filters.setNumber);
+        if (filters?.studentId) keys = keys.filter(k => k.studentId === filters.studentId);
+      }
+      if (filters?.search) {
+        const s = filters.search.toLowerCase();
+        keys = keys.filter(k =>
+          k.studentName?.toLowerCase().includes(s) ||
+          k.studentId?.toLowerCase().includes(s) ||
+          k.id?.toLowerCase().includes(s) ||
+          k.questions?.some(q => q.question_id.toLowerCase().includes(s) || q.question.toLowerCase().includes(s))
+        );
+      }
+      return keys;
+    }
+
+    async getDiagnosticAnswerKeyById(id: string): Promise<DiagnosticAnswerKey | null> {
+      if (this.mongoDb) {
+        return await this.mongoDb.collection<DiagnosticAnswerKey>('diagnostic_answer_keys').findOne({ id });
+      }
+      return (this.data?.diagnosticAnswerKeys || []).find(k => k.id === id) || null;
+    }
+
+    async updateDiagnosticAnswerKeyQuestion(
+      keyId: string,
+      questionId: string,
+      update: {
+        correctAnswer: string;
+        alternateAnswers?: string[];
+        reason: string;
+        updatedBy: string;
+        regradeExisting?: boolean;
+      }
+    ): Promise<{ success: boolean; key?: DiagnosticAnswerKey; regradedCount?: number; error?: string }> {
+      const key = await this.getDiagnosticAnswerKeyById(keyId);
+      if (!key) return { success: false, error: 'Answer key not found' };
+
+      const q = (key.questions || []).find(x => x.question_id === questionId);
+      if (!q) return { success: false, error: `Question ${questionId} not found in this answer key` };
+
+      const oldAnswer = q.answer;
+      q.answer = update.correctAnswer.trim();
+      if (update.alternateAnswers) {
+        (q as any).alternateAnswers = update.alternateAnswers.map(a => a.trim()).filter(Boolean);
+      }
+
+      // Also update in flat answerKey array if present
+      if (Array.isArray(key.answerKey)) {
+        const flat = key.answerKey.find((item: any) => item.question_id === questionId || item.qid === questionId);
+        if (flat) {
+          flat.answer = update.correctAnswer.trim();
+          if (update.alternateAnswers) {
+            flat.alternateAnswers = update.alternateAnswers.map(a => a.trim()).filter(Boolean);
+          }
+        }
+      }
+
+      // Regrade existing student evaluation reports if requested
+      let regradedCount = 0;
+      const acceptedAnswers = [update.correctAnswer.trim().toLowerCase(), ...(update.alternateAnswers || []).map(a => a.trim().toLowerCase())];
+
+      if (update.regradeExisting) {
+        const reports = (this.data?.evaluationReports || []).filter(r =>
+          (!key.studentId || r.studentId === key.studentId) &&
+          Array.isArray(r.questionResults) &&
+          r.questionResults.some(qr => qr.questionId === questionId)
+        );
+
+        for (const rep of reports) {
+          let changed = false;
+          rep.questionResults?.forEach(qr => {
+            if (qr.questionId === questionId) {
+              const studentAns = String(qr.submittedAnswer || '').trim().toLowerCase();
+              const wasCorrect = qr.isCorrect;
+              const nowCorrect = acceptedAnswers.includes(studentAns);
+              qr.correctAnswer = update.correctAnswer.trim();
+              if (wasCorrect !== nowCorrect) {
+                qr.isCorrect = nowCorrect;
+                changed = true;
+              }
+            }
+          });
+
+          if (changed) {
+            const correctCount = rep.questionResults?.filter(qr => qr.isCorrect).length || 0;
+            const totalCount = rep.questionResults?.length || rep.totalQuestions || 1;
+            rep.score = correctCount;
+            rep.totalCorrect = correctCount;
+            rep.wrongCount = totalCount - correctCount;
+            rep.narrative = `Answer key updated. Recalculated score: ${correctCount}/${totalCount} (${Math.round((correctCount / totalCount) * 100)}%).`;
+            regradedCount++;
+          }
+        }
+
+        if (this.mongoDb && regradedCount > 0) {
+          for (const rep of reports) {
+            await this.mongoDb.collection('evaluationReports').updateOne(
+              { id: rep.id },
+              { $set: { score: rep.score, totalCorrect: rep.totalCorrect, wrongCount: rep.wrongCount, questionResults: rep.questionResults, narrative: rep.narrative } }
+            );
+          }
+        }
+      }
+
+      const correctionEntry = {
+        questionId,
+        oldAnswer,
+        newAnswer: update.correctAnswer.trim(),
+        alternateAnswers: update.alternateAnswers,
+        reason: update.reason,
+        regradedCount,
+        updatedBy: update.updatedBy,
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!key.correctionHistory) key.correctionHistory = [];
+      key.correctionHistory.push(correctionEntry);
+
+      // Persist answer key change
+      if (this.mongoDb) {
+        await this.mongoDb.collection('diagnostic_answer_keys').updateOne(
+          { id: key.id },
+          { $set: { questions: key.questions, answerKey: key.answerKey, correctionHistory: key.correctionHistory } }
+        );
+      }
+
+      // Add logbook audit entry
+      await this.addLog({
+        id: 'log_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        timestamp: new Date().toISOString(),
+        schoolId: '',
+        schoolName: `Class ${key.classNumber} Set ${key.setNumber}`,
+        userId: update.updatedBy,
+        userEmail: update.updatedBy,
+        userRole: UserRole.SUPERADMIN,
+        activityType: 'evaluation_reviewed' as any,
+        status: 'Success',
+        details: `Answer key corrected for question ${questionId} (Class ${key.classNumber}, Set ${key.setNumber}): "${oldAnswer}" -> "${update.correctAnswer}". Reason: ${update.reason}. ${regradedCount} student evaluation(s) regraded.`
+      });
+
+      return { success: true, key, regradedCount };
     }
 
   // --- Preloaded Question Pool (Mathematical Curriculum Questions Classes 2-4) ---

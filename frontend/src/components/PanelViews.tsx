@@ -26,6 +26,7 @@ import { StudentProfilePanel } from './panels/StudentProfilePanel';
 import { QuestionBankPanel } from './panels/QuestionBankPanel';
 import { PageHeader } from './panels/PanelShared';
 import { CertificationReviewPanel } from './CertificationReviewPanel';
+import { AnswerKeyEditorPanel } from './panels/AnswerKeyEditorPanel';
 
 interface PanelViewsProps {
   activePanel: string;
@@ -152,6 +153,10 @@ export const PanelViews: React.FC<PanelViewsProps> = ({ activePanel, currentUser
         <CertificationReviewPanel currentUser={currentUser} token={token} />
       </div>
     );
+  }
+
+  if (panel === 'answer_key') {
+    return <AnswerKeyEditorPanel token={token} />;
   }
 
   // Fallback for any unmatched panel — renders the roles workspace (dashboard) as the content
