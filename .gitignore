@@ -18,6 +18,16 @@ backend/data/
 .env
 *.log
 
+# Hermes agent workspace (plans, scratch, settings) — local-only
+.hermes/
+
+# Per-student AI evaluation output — generated per student per scan, never committed
+ai-services/personalized_evaluation/
+ai-services/models/
+ai-services/.cache/
+ai-services/personalized_evaluation/class_*/
+backend/npm
+
 # Misc
 .vscode/
 .idea/

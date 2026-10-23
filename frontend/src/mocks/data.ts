@@ -299,16 +299,21 @@ export const AUDIT_LOGS: AuditLog[] = Array.from({ length: 40 }).map((_, i) => (
   status: Math.random() > 0.08 ? "Success" : "Failure",
 }));
 
-export const USERS: User[] = Array.from({ length: 24 }).map((_, i) => ({
-  id: `U-${String(i + 1).padStart(4, "0")}`,
-  firstName: rnd(firstNames),
-  lastName: rnd(lastNames),
-  email: `user${i + 1}@fln.org`,
-  phone: `+91${rndInt(7000000000, 9999999999)}`,
-  role: rnd(["superadmin", "state_admin", "district_admin", "school", "teacher"]) as User["role"],
-  isActive: Math.random() > 0.15,
-  createdAt: new Date(Date.now() - rndInt(86400000, 86400000 * 365)).toISOString(),
-}));
+export const USERS: User[] = Array.from({ length: 24 }).map((_, i) => {
+  const fn = rnd(firstNames);
+  const ln = rnd(lastNames);
+  return {
+    id: `U-${String(i + 1).padStart(4, "0")}`,
+    firstName: fn,
+    lastName: ln,
+    name: `${fn} ${ln}`,
+    email: `user${i + 1}@fln.org`,
+    phone: `+91${rndInt(7000000000, 9999999999)}`,
+    role: rnd(["superadmin", "state_admin", "district_admin", "school", "teacher"]) as User["role"],
+    isActive: Math.random() > 0.15,
+    createdAt: new Date(Date.now() - rndInt(86400000, 86400000 * 365)).toISOString(),
+  };
+});
 
 export const ACADEMIC_YEARS = ["2024-25", "2025-26", "2026-27"];
 export const GRADES = ["Class 1", "Class 2", "Class 3", "Class 4", "Class 5", "Class 6", "Class 7", "Class 8"];

@@ -1,25 +1,76 @@
 import fs from 'fs/promises';
+import { readFileSync } from 'fs';
 import path from 'path';
-import { MongoClient, Db } from 'mongodb';
+import { fileURLToPath } from 'url';
+import bcrypt from 'bcrypt';
+import { MongoClient, Db, ClientSession } from 'mongodb';
+import { CURRICULUM_MAPPING } from './config/curriculumMap';
+import type { StudentCycleLock } from './paperLock';
+import type { ScanQualityResult } from './scanQuality';
+import type { QuestionFamily } from './types/questionTemplateParams';
+import type { ErrorType } from './errorClassification';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const DB_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.resolve(DB_DIR, 'db.json');
 
+// Load seed competency requirements (SRS R-7). Falls back to [] if the file
+// is missing — server still boots, but eligibility decisions will be empty
+// (cert rows never transition to 'active' until seed data is restored).
+export function getSeedCompetencyRequirements(): CompetencyRequirement[] {
+  try {
+    const seedPath = path.resolve(__dirname, 'data', 'competencyRequirements.seed.json');
+    const raw = readFileSync(seedPath, 'utf-8');
+    return JSON.parse(raw) as CompetencyRequirement[];
+  } catch (err) {
+    console.error('Failed to load seed competency requirements:', err);
+    return [];
+  }
+}
+
+// Every seeded demo account shares one password, stored ONLY as a bcrypt hash
+// (never as plaintext). Defaults to the well-known demo password shown on the login
+// screen; override with SEED_DEMO_PASSWORD for a private deployment.
+export const SEED_DEMO_PASSWORD = process.env.SEED_DEMO_PASSWORD || 'Fln@2026';
+export const SEED_DEMO_PASSWORD_HASH = bcrypt.hashSync(SEED_DEMO_PASSWORD, 10);
+
 export let mongoClient: MongoClient | null = null;
 
 export const connectDB = async () => {
-  const uri = process.env.MONGODB_URI;
+  let uri = process.env.MONGODB_URI;
   if (!uri) {
-    console.error("MONGODB_URI not set — cannot start server");
-    process.exit(1);
+    console.log("MONGODB_URI not set — using local DB");
+    return;
   }
-  try {
-    mongoClient = new MongoClient(uri);
-    await mongoClient.connect();
-    console.log("MongoDB Connected");
-  } catch (err) {
-    console.error("MongoDB connection failed:", err.message);
-    process.exit(1);
+  let connected = false;
+  let attempt = 1;
+  const maxAttempts = 3;
+  while (!connected && attempt <= maxAttempts) {
+    try {
+      mongoClient = new MongoClient(uri, {
+        serverSelectionTimeoutMS: 5000,
+        connectTimeoutMS: 8000,
+      });
+      await mongoClient.connect();
+      // Test ping to verify active MongoDB connection
+      await mongoClient.db().command({ ping: 1 });
+      console.log("MongoDB Connected");
+      dbStore.useMongo = true;
+      connected = true;
+    } catch (err: any) {
+      console.error(`MongoDB connection attempt ${attempt}/${maxAttempts} failed: ${err.message}`);
+      attempt++;
+      if (attempt <= maxAttempts) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+  }
+
+  if (!connected) {
+    console.warn("Could not connect to remote MongoDB — falling back to local file DB so server runs reliably.");
+    mongoClient = null;
   }
 };
 
@@ -39,6 +90,8 @@ export interface User {
   email: string;
   name: string;
   role: UserRole;
+  passwordHash?: string; // bcrypt hash; verified at login. Never sent to clients.
+  phoneNumber?: string;
   stateCode?: string;
   districtCode?: string;
   blockCode?: string;
@@ -57,6 +110,23 @@ export interface School {
   strength: 'high' | 'low'; // High-strength vs. Low-strength (§1.2)
   teachersCount: number;
   isAccessLocked?: boolean;
+  villageCity?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  landmark?: string;
+  pinCode?: string;
+  udiseCode?: string;
+  governmentSchoolCode?: string;
+  schoolType?: string;
+  managementType?: string;
+  email?: string;
+  phone?: string;
+  establishmentYear?: number;
+  initialClasses?: string[];
+  principalId?: string;
+  status?: 'active' | 'pending' | 'inactive';
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface ClassGroup {
@@ -75,12 +145,36 @@ export interface Student {
   section: string;
   schoolId: string;
   teacherId?: string;
-  currentLevel: number;
-  currentSubLevel?: number;
-  targetLevel: number;
-  aadharMasked: string; // Mandatory, unique identifier masked (§13.2 R-6)
+  currentLevel: number | null;
+  currentSubLevel?: number | null;
+  targetLevel: number | null;
+  aadharMasked: string; // Masked identifier only; the plaintext Aadhaar is never stored in MongoDB.
+  aadhaarTokenId?: string; // Opaque token returned by Aadhaar Vault.
+  aadhaarIdentityId?: string; // Deterministic identity id used for duplicate detection.
+  // Clean numeric ID for teacher-facing display (roster, profile, printed
+  // worksheets) — see backend/src/displayId.ts. Derived from the same
+  // non-sensitive state/district/block/school/class/sequence hierarchy
+  // already encoded in `id`, just reformatted to be readable/printable.
+  // Never used as a lookup key — `id` remains the only internal identifier.
+  displayId?: string;
   levelHistory: { level: number; subLevel?: number; date: string; reason: string }[];
-  streak: number;
+  assignedDiagnosticQuestions?: Question[];
+  // Extended profile — optional, filled in by the student's own school/teacher.
+  // guardianContact and address are PII and are redacted for roles beyond
+  // superadmin/school/teacher (same treatment as aadharMasked, §13.2 R-6).
+  gender?: 'Male' | 'Female' | 'Other';
+  dob?: string;
+  guardianName?: string;
+  guardianRelation?: string;
+  guardianContact?: string;
+  address?: string;
+  bloodGroup?: string;
+  disabilityStatus?: string;
+  midDayMealBeneficiary?: boolean;
+  busRoute?: string;
+  siblingsInSchool?: string;
+  teacherNotes?: string;
+  streak?: number;
 }
 
 export interface Question {
@@ -89,10 +183,13 @@ export interface Question {
   answer: string;
   answer_type: 'text' | 'number' | 'choice';
   choices?: string[];
+  /** Optional mapping from an exact choice string to its error tag. */
+  choiceErrorTags?: Record<string, string>;
   topic: string;
   subtopic: string;
   difficulty: 'easy' | 'medium' | 'hard';
   source_level: number; // Mapping to mathematical level
+  conceptId?: string; // Concept ID from 93-node framework (e.g. S1.1, S3.3)
   svgAsset?: string; // Standard pre-built SVG asset category
 }
 
@@ -118,6 +215,112 @@ export interface LevelWorksheet {
   generatedAt: string;
 }
 
+export interface DiagnosticAnswerKey {
+  id: string;
+  jobId: string;
+  studentId: string;
+  studentName: string;
+  classNumber: number;
+  setNumber: number;
+  masterJson: any;
+  coords: any;
+  questionPaperJson: any;
+  questions: Question[];
+  answerKey?: any;
+  /**
+   * One physical answer region per gradable question, keyed by the real
+   * question id, measured from the rendered worksheet at generation time.
+   *
+   * Distinct from `coords` above, which is keyed by layout name and cannot be
+   * joined to a question id. This is what a scan reads: crop the region for
+   * question X, recognise what is inside it, and the result is question X's
+   * answer — no inference from ordering.
+   */
+  answerRegions?: Array<{
+    question_id: string;
+    /** Section heading the offset is measured from; found in the PDF text layer. */
+    anchor?: string;
+    dx_mm?: number;
+    dy_mm?: number;
+    page: number;
+    x_mm: number;
+    y_mm: number;
+    w_mm: number;
+    h_mm: number;
+  }>;
+  createdAt: string;
+}
+
+export interface LevelHtmlTemplate {
+  levelNumber: number;
+  title: string;
+  fileName: string;
+  htmlContent: string;
+  createdAt: string;
+}
+
+export interface QuestionBankEntry {
+  /**
+   * Stable identity, derived from (level, section, questionNumber) — verified
+   * unique across all 1202 seeded questions. Deliberately NOT derived from the
+   * question text: 314 questions share their text with another, and fixing a
+   * typo must not orphan a reviewer's mapping.
+   *
+   * This exists so review work survives a re-seed. Before it, `seedQuestionBank`
+   * did deleteMany + insertMany, so every re-seed rotated the Mongo _ids and
+   * would have silently destroyed every mapping a superadmin had made.
+   */
+  questionId: string;
+
+  level: number;
+  levelTitle: string;
+  section: string;
+  sectionType: string;
+  questionNumber: number;
+  questionText: string;
+  answer: string;
+  svgHtml: string;
+
+  // --- Review state. Written by a human, never by the seeder. ---
+
+  /** The 93-space level this question actually assesses, once a human says so. */
+  mappedLevel?: number | null;
+  /** Immutable concept tag (S1.1 - S7.18), set from the mapped level. */
+  conceptId?: string;
+  /**
+   * `untagged` — nobody has looked at it yet.
+   * `mapped`   — a human assigned it to a 93-space level.
+   * `retired`  — a human judged it not worth keeping. Kept, not deleted, so the
+   *              decision is auditable and reversible; readers must filter it out.
+   */
+  reviewStatus?: 'untagged' | 'mapped' | 'retired';
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewNote?: string;
+}
+
+/** The one place the question identity is computed. Seeder and API must agree. */
+export function questionBankId(level: number | string, section: string, questionNumber: number | string): string {
+  return `qb_L${level}_${String(section).replace(/[^A-Za-z0-9.]+/g, '-')}_${questionNumber}`;
+}
+
+// Canonical set of assessment cycle names, used everywhere a cycle name is
+// displayed or written (levelHistory.reason, Worksheet.cycle) so there is
+// exactly one naming scheme across the whole app.
+export const CYCLE_NAMES = ['Baseline', 'Mid-year', 'End-of-year'] as const;
+export type CycleName = typeof CYCLE_NAMES[number];
+export interface WorksheetGenerationWindow {
+  id: string;
+  classId: string;
+  cycle: CycleName;
+  schoolId: string;
+  start: string;
+  teacherPriorityEnd: string;
+  end: string;
+  generatedByRole: UserRole | null;
+  generatedByEmail: string | null;
+  closed: boolean;
+}
 export interface Worksheet {
   id: string; // Exam ID
   classId: string;
@@ -126,15 +329,29 @@ export interface Worksheet {
   schoolId: string;
   generatedByRole: UserRole;
   generatedByEmail: string;
-  cycle: 'Baseline' | 'Mid-year' | 'End-of-year';
+  cycle: CycleName;
   date: string;
   questions: Question[];
-  locks: {
+  // Which students this worksheet was actually generated for — needed to
+  // compute how many are still pending evaluation (studentIds.length minus
+  // the number with a matching EvaluationReport.worksheetId). Optional so
+  // older/other worksheet-creation paths that don't set it still validate.
+  studentIds?: string[];
+    locks: {
     locked: boolean;
     lockedByRole: UserRole | null;
     lockedByEmail: string | null;
     timestamp: string | null;
   };
+
+  generationWindow?: {
+    start: string;
+    teacherPriorityEnd: string;
+    end: string;
+    generatedByRole: UserRole | null;
+    generatedByEmail: string | null;
+  };
+
   timing: {
     examDate: string; // e.g. "2026-07-06"
     printWindowStart: string; // ISO String
@@ -149,6 +366,21 @@ export interface Worksheet {
   };
 }
 
+// Issue #182: one entry per bulk-generation request (diagnostic/practice/
+// remedial/midline/endline), written only from the existing bulk routes at
+// the point they already run — not a new trigger point of its own.
+export interface TestHistoryEntry {
+  id: string;
+  teacherId: string;
+  teacherEmail: string;
+  requestType: 'diagnostic' | 'practice' | 'remedial' | 'midline' | 'endline';
+  timestamp: string;
+  studentCount: number;
+  classId?: string;
+  className?: string;
+  schoolId?: string;
+}
+
 export interface AnswerSubmission {
   id: string;
   worksheetId: string;
@@ -159,6 +391,168 @@ export interface AnswerSubmission {
   submittedAt: string;
   isDelayed: boolean;
   answers: { [questionId: string]: string }; // Q1 -> A, Q2 -> 5, etc.
+  scanQuality?: ScanQualityResult;
+  /**
+   * The paper this submission was written against, for assessments that have no
+   * persisted `Worksheet` to join to.
+   *
+   * A worksheet submission resolves its questions through `worksheetId`. A
+   * diagnostic and an ICR scan do not: both are generated per child and neither
+   * is stored as a `Worksheet`, so `answers` alone is an unreadable map of ids
+   * to strings — there is nothing to say what was asked or what the right answer
+   * was. Recording the paper here makes the submission self-describing rather
+   * than inventing synthetic `Worksheet` rows that would surface in the
+   * generation and lock screens.
+   *
+   * Optional: submissions written before this field existed, and worksheet
+   * submissions that do not need it, simply omit it.
+   */
+  questions?: Question[];
+}
+
+/**
+ * Evidence Model (#479): one row per question attempt, richer than
+ * `AnswerSubmission.answers`' bare string.
+ *
+ * Two attempts can both be correct and still not be equivalent evidence of
+ * whether a child can do a concept independently -- e.g. correct with zero
+ * hints on the first try vs. correct only after three hints and two tries.
+ * The architecture discussion is explicit that this has to be captured at
+ * the time, not reverse-engineered later from correct/incorrect alone --
+ * see `scaffoldingLevel`'s own comment.
+ *
+ * Deliberately a separate collection from `AnswerSubmission`, the same way
+ * `TeacherObservationRecord` (#617) is -- see that interface's comment for
+ * why a richer evidence record doesn't just get bolted onto the thing it's
+ * evidence about.
+ */
+export interface AttemptRecord {
+  id: string;
+  studentId: string;
+  questionId: string;
+  /** The worksheet/session this attempt belongs to, when one exists -- optional for the same reason `AnswerSubmission.questions` is: a live practice session may not be tied to a persisted Worksheet. */
+  worksheetId?: string;
+
+  answer: string;
+  isCorrect: boolean;
+  /** Seconds spent on this question, when the capture path can measure it. Optional: not every path can. */
+  timeTakenSeconds?: number;
+
+  hintsUsed: number;
+  attemptsBeforeSuccess: number;
+  /**
+   * 0 Independent · 1 Procedural prompt ("What operation do you need?") ·
+   * 2 Strategic prompt ("Can you first separate the tens and ones?") ·
+   * 3 Worked/example support · 4 Direct assistance (system guides step by
+   * step). A closed 0-4 scale, not free text, per #479's acceptance
+   * criteria. An `independenceScore`, if wanted downstream, is meant to be
+   * DERIVED from this + `attemptsBeforeSuccess` + `hintsUsed` -- not stored
+   * as its own separate field.
+   */
+  scaffoldingLevel: 0 | 1 | 2 | 3 | 4;
+  /** How the question was presented/answered (e.g. 'numeric', 'visual', 'verbal'). Left as an open string -- the architecture discussion names this field but, unlike scaffoldingLevel, doesn't define a closed vocabulary for it. */
+  representation?: string;
+
+  /**
+   * Required, not optional (#479 acceptance criteria) -- this is the join
+   * key to #459. Uses #459's own `ErrorType` values (unanswered,
+   * digit_reversal, decimal_place_shift, off_by_one, unclassified) so this
+   * actually joins to that data instead of drifting into a different
+   * vocabulary -- `EvaluationReport.rootCauses`' conceptual/careless/
+   * prerequisite categories are a different classification, not this one.
+   * 'none' is the one addition: it covers a fully correct attempt, which
+   * has no error to classify and isn't a value #459 itself produces.
+   */
+  errorType: ErrorType | 'none';
+
+  recordedAt: string;
+  /** teacherId/volunteerId who captured this attempt. */
+  recordedBy: string;
+}
+
+export type ConfidenceLevel = 'Very High' | 'High' | 'Moderate' | 'Low';
+
+export interface TeacherActionPlanStep {
+  week: number;
+  title: string;
+  topics: string[];
+}
+
+export interface PrerequisitePath {
+  weakConcepts: string[];
+  highPriorityFoundations: string[];
+  supportingSkills: string[];
+  actionPlan: TeacherActionPlanStep[];
+}
+
+export interface EvaluationReasoning {
+  explanation: {
+    headline: string;
+    narrative: string;
+  };
+  conceptMastery: { [topic: string]: 'Strong' | 'Needs Practice' | 'Satisfactory' };
+  confidence?: {
+    score: number;
+    level: ConfidenceLevel;
+    explanation: string;
+  };
+  learningProgression: {
+    currentLevel: number;
+    currentLevelName: string;
+    currentStrand: string;
+    nextMilestone: { level: number; name: string; strand: string } | null;
+    blockers: { topic: string; questionId?: string; errorType?: string }[];
+    recommendations: string[];
+  };
+  // Phase 5: Prerequisite Learning Path. Built from the same questionResults
+  // array that powers the rest of the reasoning payload, so the only source
+  // of truth is the submitted paper's correctness.
+  prerequisitePath?: PrerequisitePath;
+  prerequisiteLearningPath?: {
+    highPriorityFoundations: string[];
+    supportingSkills: string[];
+    affectedCompetencies: string[];
+    remediationSequence: string[];
+  };
+  evidence?: {
+    assessedTopics: string[];
+    strongestConcepts: string[];
+    weakestConcepts: string[];
+    failedQuestionSummary: {
+      total: number;
+      byLevel: { level: number; name: string | null; count: number; pipelineReported?: boolean }[];
+      byTopic: { topic: string; count: number }[];
+    };
+    difficultyBreakdown?: {
+      easy: { correct: number; attempted: number };
+      medium: { correct: number; attempted: number };
+      hard: { correct: number; attempted: number };
+    };
+    conceptMastery: { [topic: string]: 'Strong' | 'Needs Practice' | 'Satisfactory' };
+  };
+  remediation?: {
+    reusedFailedQuestions: number;
+    newlyIntroducedCurriculum: number;
+    remediationReason: string;
+    targetClass: number | null;
+    targetPhrase: string | null;
+  };
+  curriculumSummary?: {
+    currentLevelName: string;
+    currentObjective: string;
+    currentLearningOutcome: string[];
+    currentTopics: string[];
+    nextLevelName: string | null;
+    nextObjective: string | null;
+    transitionReason: string;
+  };
+  personalized?: {
+    failedQuestionsReused: number;
+    newLevelQuestionsAdded: number;
+    targetPhrase: string | null;
+    targetClass: number | null;
+    rationale: string;
+  };
 }
 
 export interface EvaluationReport {
@@ -167,11 +561,98 @@ export interface EvaluationReport {
   worksheetId: string;
   score: number;
   totalQuestions: number;
+  totalCorrect?: number;
+  wrongCount?: number;
   conceptMastery: { [topic: string]: 'Strong' | 'Needs Practice' | 'Satisfactory' };
   narrative: string; // Narrative summary for parent/teacher
   recommendedLevel: number;
   recommendedSubLevel?: number;
   timestamp: string;
+  scanQuality?: ScanQualityResult;
+  /**
+   * Per-wrong-answer root causes from the Python pipeline (`ai-services`,
+   * step 2 `evaluate_child`).
+   *
+   * The pipeline has always produced these; until now the backend read only
+   * `topics_to_focus` out of its JSON and discarded the rest, so the analysis
+   * was recomputed on every diagnostic and then thrown away. Optional because
+   * the worksheet-evaluation path does not run the pipeline.
+   */
+  rootCauses?: Array<{
+    questionId: string;
+    error: string;
+    topic: string;
+    flnLevel: number;
+    /** conceptual = doesn't understand · careless = slip · prerequisite = missing foundation */
+    errorType: 'conceptual' | 'careless' | 'prerequisite' | string;
+    analysis: string;
+  }>;
+  levelsFailed?: number[];
+  prerequisitesToCheck?: string[];
+  performanceByDifficulty?: {
+    [difficulty: string]: { attempted: number; correct: number };
+  };
+  reasoning?: EvaluationReasoning;
+  // Issue #180: per-question breakdown, populated at creation time wherever
+  // the grading logic already has this data. Optional because older reports
+  // (and any evaluation path that doesn't yet populate it) predate this —
+  // the teacher-override endpoint requires it to exist on the report it's
+  // correcting, since a correction is meaningless without knowing which
+  // question is being corrected.
+  questionResults?: { questionId: string; question?: string; correctAnswer?: string; submittedAnswer: string; isCorrect: boolean }[];
+    teacherReviewed?: boolean;
+    reviewedBy?: string; // reviewing teacher's email
+    reviewedAt?: string;
+    // Per-level pass/fail breakdown for diagnostic reports — the diagnostic
+    // intentionally does NOT assign a placement level (we are heading toward
+    // analytics & reports, which read these instead). Populated wherever the
+    // grading code knows the per-question source_level.
+    passedLevels?: number[];
+    failedLevels?: number[];
+    // Skills the student is struggling with — conceptIds of the failed levels
+    // plus any direct prerequisites (so the panel can show "you have gaps in
+    // Number Sense: Counting 6-10"). Drives the status text in the diagnostic
+    // panel instead of the old hardcoded "Verified & Certified".
+    skillGaps?: { conceptId: string; level: number; levelTitle: string; strand: string }[];
+  }
+
+// --- SRS R-7: Certification Engine ---
+
+export type MasteryLevel = 'Strong' | 'Satisfactory' | 'Needs Practice';
+
+export interface CompetencyRequirement {
+  classNumber: number;        // 2-4 (per SRS §3)
+  level: number;              // typically 5
+  topic: string;              // e.g. 'Number Operations'
+  meetsThreshold: MasteryLevel;
+  isMandatory: boolean;
+}
+
+export type CertificationStatus = 'active' | 'review_needed' | 'revoked';
+
+export interface Certification {
+  id: string;
+  studentId: string;
+  classNumber: number;
+  level: number;
+  decisionSnapshot: {
+    outcome: 'eligible' | 'not_eligible' | 'insufficient_evidence';
+    evaluatedAt: string;
+    classNumber: number;
+    level: number;
+    metTopics: string[];
+    missingTopics: string[];
+    unassessedTopics: string[];
+  };
+  status: CertificationStatus;
+  version: number;            // monotonic per (studentId, classNumber, level)
+  certificateId?: string;
+  issuedAt?: string;
+  reviewReason?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Ticket {
@@ -195,7 +676,36 @@ export interface LogEntry {
   userId: string;
   userEmail: string;
   userRole: UserRole;
-  activityType: 'download' | 'print' | 'conduct' | 'scan' | 'verify' | 'ticket';
+  activityType:
+    | 'download'
+    | 'print'
+    | 'conduct'
+    | 'scan'
+    | 'verify'
+    | 'ticket'
+    // Vault audit actions (the vault is the only writer of these
+    // — see backend/src/modules/vault/audit/logbook-entry.ts). The
+    // `logbook` collection is the single audit sink; there is no
+    // separate `vault_audit_log` table. The Aadhaar vault command
+    // and the surrounding route layer use the existing
+    // `dbStore.addLog` / `dbStore.addLogInSession` path, so these
+    // values are visible in the same `logbook` queries the rest
+    // of the FLN backend already runs.
+    | 'tokenize'
+    | 'detokenize'
+    | 'step_up_request'
+    | 'step_up_approve'
+    | 'mfa_enroll'
+    | 'mfa_verify'
+    // NEW (Wave 2A): account-level MFA enrollment lifecycle
+    // events. The vault command and the FLN route layer both
+    // write rows that carry these activityType values. The
+    // mapping lives in
+    // `backend/src/modules/vault/audit/logbook-entry.ts`.
+    | 'mfa_enrollment_initiated'
+    | 'mfa_enrollment_verified'
+    | 'mfa_enrollment_failed'
+    | 'mfa_enrollment_revoked';
   status: 'Success' | 'Failed' | 'Delayed';
   details: string;
 }
@@ -259,6 +769,391 @@ export interface BestPractice {
   viewCount: number;
   createdAt: string;
 }
+export interface MisconceptionCluster {
+  id: string;
+  name: string;
+  description: string;
+  teacherAction: string;
+  forwardRisk: string;
+  studentIds: string[];
+  centroid?: number[];
+  /**
+   * The class this archetype belongs to. Archetypes never span classes: the
+   * same-looking error means something different at each level (an off-by-one
+   * in Class 2 counting is not the off-by-one of Class 4 regrouping), and a
+   * teaching group a teacher can act on has to be one class they actually
+   * teach. Optional only because clusters created before this field existed
+   * carry no class; those are treated as belonging to no class and skipped.
+   */
+  classGroup?: string;
+  /**
+   * Who last renamed this archetype by hand, if anyone.
+   *
+   * Presence marks the name as human-authored, which is what stops automation
+   * from taking it back: the deterministic re-naming pass skips these outright
+   * rather than relying on the name merely not *looking* like a placeholder.
+   *
+   * Worth knowing when reading these: an archetype is scoped by `classGroup`
+   * alone and carries no `schoolId`, so a rename is visible to every school
+   * teaching that class — hence recording who did it.
+   */
+  nameSetBy?: string;
+  nameSetByRole?: UserRole;
+  nameSetAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * A Superadmin-authored instruction describing *what to ask* at a given level —
+ * not a question itself. One logic is the prompt the question-generation
+ * pipeline turns into many concrete `Question` rows across many worksheets.
+ *
+ * Deliberately a separate collection from `questions`: these have different
+ * authors (human vs. generator), different consumers (generation pipeline vs.
+ * renderer and ICR scanner), and different lifecycles (editable in place vs.
+ * immutable once a child has answered them). Folding them together would make
+ * one collection carry two incompatible lifecycles.
+ */
+export interface QuestionLogic {
+  id: string;
+  /** 1..LEVEL_COUNT, L-notation. Mutable — a logic filed under the wrong level can be re-tagged. */
+  level: number;
+  /** Denormalized for display so the list view needs no join. */
+  levelName: string;
+  /** At least one. Validated server-side against the level's primary+supporting skills. */
+  skills: string[];
+  /** Optional. Empty means "assess the skill at full granularity", which is a valid choice. */
+  subskills: string[];
+  logicText: string;
+  /**
+   * Which relationship taxonomy was in force when this was authored.
+   * The project is moving from the code's 4-type model to the research's
+   * 3-type model; pinning it per-document means both can coexist through the
+   * migration instead of forcing a schema break.
+   */
+  taxonomy: '3-type' | '4-type';
+  createdBy: string;
+  createdByEmail: string;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: string;
+  updatedByEmail: string;
+  /** Soft delete: the generation pipeline may already hold this id, so the row stays for audit. */
+  deletedAt: string | null;
+  deletedBy: string | null;
+}
+
+/**
+ * Approval states for a question template, per #451's propose/approve
+ * vocabulary — declared here (rather than only in the workflow issue) because
+ * #486's generation gate already needs a closed set to test membership
+ * against, and two spellings of the same four states would be a bug nobody
+ * notices until a row is stranded between them.
+ */
+export const QUESTION_TEMPLATE_STATUSES = ['draft', 'pendingApproval', 'approved', 'rejected'] as const;
+export type QuestionTemplateStatus = (typeof QUESTION_TEMPLATE_STATUSES)[number];
+
+/**
+ * A Superadmin-authored question: the stem a child reads, how the answer is
+ * recorded, and the constraints that govern the numbers inside it.
+ *
+ * Distinct from `QuestionLogic`, which described a question in prose and left
+ * the generator to interpret it. A template says the same thing in fields that
+ * can be validated, compared and bulk-imported, so two authors describing the
+ * same variation produce the same row rather than two sentences that only a
+ * human can tell apart.
+ *
+ * Addressed by `conceptId`, never by level number. Levels are insertable and
+ * re-orderable; the concept a question assesses is not. See `CurriculumLevel`.
+ */
+export interface QuestionTemplate {
+  id: string;
+
+  /** Canonical curriculum identity, e.g. "S3.4". The thing this question assesses. */
+  conceptId: string;
+  /**
+   * Display alias only, resolved from `conceptId` at write time. Never the
+   * identity: it is denormalised so the list view needs no join, and it is
+   * recomputed whenever the concept changes.
+   */
+  levelNumber: number;
+  levelName: string;
+
+  /** At least one. Validated server-side against the level's primary+supporting skills. */
+  skills: string[];
+  /** Optional. Empty means "assess the skill at full granularity", which is a valid choice. */
+  subskills: string[];
+
+  /**
+   * Whether this item is answered on a student worksheet, recorded by a
+   * teacher watching the child, or valid either way. Added 2026-09-19 for
+   * Balvatika's two-sheet decision (PR #517 §4): NCF-FS §6.1.2(a) rules out
+   * written tests at this age for some outcomes (e.g. "counts in any order,
+   * total stays the same" — the order can't be captured on paper, only
+   * observed). Defaults to 'written' for existing rows, since every template
+   * before this field existed was authored for the student worksheet path;
+   * `'observed'`/`'both'` are opt-in on new rows, not inferred.
+   */
+  assessmentMode: 'written' | 'observed' | 'both';
+
+  /**
+   * Approval state for generation. Reuses #451's vocabulary so the
+   * propose/approve workflow lands on this field instead of a second one.
+   *
+   * `undefined` (every row written before this field existed) is read as
+   * `'approved'` by `isApprovedForGeneration` — see that function for why
+   * defaulting to approved is the safe reading rather than an oversight.
+   */
+  status?: QuestionTemplateStatus;
+
+  /**
+   * What the question should make the child do, in the author's words. This is
+   * an instruction to the generator, not a finished question: it names the
+   * learning action, the visual behaviour, and how the answer is given.
+   *
+   * Required for structured records. Deliberately never contains a specific
+   * number or object, so one intent can be rendered across every visual theme
+   * without being re-authored.
+   */
+  generationIntent: string;
+
+  /** Which family of question this intent produces. Governs how it is rendered. */
+  questionFamily: QuestionFamily;
+
+  /**
+   * How this row was authored. `structured` rows carry a generationIntent and
+   * no authored answer. `legacy-free-text` rows predate that and carry a stem.
+   * Kept explicit so a migration never has to guess by sniffing empty strings.
+   */
+  paramMode: 'structured' | 'legacy-free-text' | 'hybrid';
+
+  /**
+   * Visual themes this intent may be drawn with, as ids into the SVG manifest.
+   * Plural because one counting intent should work across fruit, animals and
+   * vehicles; the renderer picks a variant per paper.
+   */
+  svgThemeIds: string[];
+
+  /**
+   * LEGACY. What the child reads, written out by hand. Retained read-only so
+   * rows authored before the intent model are not lost; new structured records
+   * leave it empty. Do not add new writers.
+   */
+  stem: string;
+  /**
+   * LEGACY. A hand-authored answer. Retained for the same reason as `stem`.
+   *
+   * Structured records must not carry one: the answer is produced by the
+   * generator and lives on the generated Question as an internal answer key,
+   * never as something a Superadmin typed into the authoring form.
+   */
+  answerSpec: string;
+
+  // --- Structured parameters. See backend/src/types/questionTemplateParams.ts ---
+  numeralRange: string | null;
+  digitCount: string | null;
+  /** Empty means "not specified", not "any operation". */
+  operations: string[];
+  maxOperandCount: number | null;
+  carryBehavior: string | null;
+  borrowBehavior: string | null;
+  maxSumOrDifference: string | null;
+  answerType: string | null;
+  blankCount: number | null;
+  questionCount: number | null;
+  subjectCategory: string | null;
+
+  /**
+   * Human-readable name for this variation, derived from the parameters at
+   * creation. Editable afterwards, and an edit is preserved: the derivation
+   * runs again only when an author asks for it.
+   */
+  name: string;
+  /**
+   * Fingerprint of (conceptId + parameters). Two templates constraining the
+   * same thing at the same concept share a key, which is what makes duplicate
+   * variations findable. Deliberately not a unique index — two Superadmins may
+   * legitimately author the same variation with different stems.
+   */
+  variantKey: string;
+  /** Free-form author tags, lowercased and de-duplicated on write. */
+  tags: string[];
+  /** Optional canonical Balvatika error tag (Issue #626). */
+  errorTag?: string;
+
+  /** Maps distractor choice text to misconception error tag (#625/#627). */
+  choiceErrorTags?: Record<string, string>;
+
+  /** Where the row came from. Bulk imports are worth being able to find again. */
+  source: 'form' | 'csv';
+
+  createdBy: string;
+  createdByEmail: string;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: string;
+  updatedByEmail: string;
+  /** Soft delete: a generated paper may already cite this id, so the row stays for audit. */
+  deletedAt: string | null;
+  deletedBy: string | null;
+}
+
+/**
+ * One selectable value in the question-authoring form: a number range, an
+ * operation, or a visual theme.
+ *
+ * These live in the database rather than in a TypeScript constant so a
+ * Superadmin can add "0 to 500" without a deploy. The catalogue, the server
+ * validation and the form all read these same rows, which is what stops a
+ * value existing in the dropdown but being rejected on save.
+ */
+export interface QuestionOption {
+  id: string;
+  type: 'numeral-range' | 'operation' | 'svg-theme';
+  /** Stable machine key, e.g. "0-500". Unique per type among active rows. */
+  key: string;
+  label: string;
+
+  /** Range bounds. Only meaningful when type is 'numeral-range'. */
+  min?: number;
+  max?: number;
+
+  /**
+   * Whether anything can actually generate with this value yet.
+   *
+   * A label in the database is not an implementation: an author can record
+   * that they want modulo questions, but the option stays out of the
+   * generation catalogue until something can produce one. This is what stops
+   * a Superadmin authoring rows that silently never generate.
+   */
+  implementationStatus: 'ready' | 'not-ready';
+
+  /** Soft delete. Values are deactivated, never removed, because rows reference them. */
+  active: boolean;
+
+  /** Marks a value we intend to retire but have not migrated off yet. */
+  deprecated?: boolean;
+
+  metadata?: Record<string, unknown>;
+
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * One teacher's rating of one student on one observable concept, for one
+ * assessment cycle. Added 2026-09-19 for Balvatika's teacher-observation
+ * sheet (PR #517 §4/§4b) — the counterpart to `answerSubmissions` for
+ * concepts that can't be captured on a written worksheet at all (NCF-FS
+ * §6.1.2(a) forbids testing at this age for some outcomes; a teacher watches
+ * and records instead).
+ *
+ * Deliberately a separate collection from `answerSubmissions`, not a variant
+ * of it: the author is the teacher, not the child; there is no scanned
+ * artefact or answer key; and the rating scale is the three-level Holistic
+ * Progress Card scale (PR #517 §4b), not correct/incorrect. Folding this into
+ * `answerSubmissions` would force every consumer of that collection to
+ * branch on "was this actually answered by a student," which is exactly the
+ * kind of two-incompatible-lifecycles problem `QuestionLogic`'s own comment
+ * warns against for a different pair of collections.
+ *
+ * One record = one (studentId, conceptId, cycle) rating. A class-grid sheet
+ * and a per-child half-page sheet (PR #517 §4's two supported teacher-sheet
+ * layouts) both produce the same shape of record on the backend — the
+ * layout is a rendering/scanning choice, not a data-model one.
+ */
+export interface TeacherObservationRecord {
+  id: string;
+  studentId: string;
+  /** The concept observed, e.g. "S3.12" (Counts in Any Order). */
+  conceptId: string;
+  teacherId: string;
+  teacherEmail: string;
+  schoolId: string;
+  classId: string;
+  cycle: string; // matches CycleName ('Baseline' | 'Mid-year' | 'End-of-year')
+
+  /**
+   * PR #517 §4/§4b's three-level scale, in both spellings used across the
+   * decision doc: the Holistic Progress Card terms, and "how much help" —
+   * same meaning, kept as one field so a UI can render either without a
+   * second lookup. Proficient = on their own; Progressive = with some help;
+   * Beginner = with a lot of help.
+   */
+  rating: 'Proficient' | 'Progressive' | 'Beginner';
+
+  /**
+   * Explicit absence-of-evidence state, distinct from `rating` entirely —
+   * PR #517 §4: "observation-only nodes show 'not yet assessed', never
+   * 'Beginner', until observation data exists." A record should not exist at
+   * all until a teacher has actually observed the child; this flag exists so
+   * a UI can distinguish "no record" (never observed) from "record exists
+   * but marked not-yet-assessed" (observed, teacher couldn't judge yet) —
+   * the two have different implications for follow-up.
+   */
+  notYetAssessed: boolean;
+
+  observedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * One row per FLN level in the canonical 93-level taxonomy.
+ *
+ * This collection exists to give the curriculum a single queryable home. Before
+ * it, the 93 levels lived only as TypeScript in the frontend package, so every
+ * backend feature that needed to reason about levels hand-authored its own copy
+ * — there were six such copies at last count, in two different id spaces.
+ *
+ * Seeded (idempotently) by `npm run seed:levels` from
+ * `frontend/src/data/skillProgressionMap.ts`. No route writes to it.
+ */
+export interface CurriculumLevel {
+  /**
+   * Canonical, immutable identity. Generated once at first insert and never
+   * regenerated — student evidence points here, so renumbering would orphan it.
+   * Every other identifier on this document is an alias of this one.
+   */
+  conceptId: string;
+
+  /** L-notation, 1..93. The alias the platform standardises on. */
+  levelNumber: number;
+  /** Research S-notation, e.g. "S4.3". */
+  sCode: string;
+  /**
+   * The retired 1..59 worksheet-engine id, where one maps.
+   *
+   * Deliberately temporary: it is the bridge that lets 59-keyed content be
+   * re-keyed by lookup rather than by hand, and lets anything still speaking
+   * 59 keep working mid-migration. Null once a level has no 59-space ancestor,
+   * and the field is dropped entirely once nothing reads it.
+   */
+  legacyLevel59: number | null;
+
+  stage: string;
+  capability: string;
+  strand: string;
+
+  /** From the skill map — a level is defined by the skills it assesses. */
+  primarySkills: string[];
+  supportingSkills: string[];
+  subskills: string[];
+
+  /**
+   * Content coverage, recomputed at every seed. These are the honest answer to
+   * "how many of the 93 can we actually render today" — false is a real gap,
+   * not a defect.
+   */
+  hasStaticHtml: boolean;
+  hasBuilder: boolean;
+
+  curriculumVersion: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 interface DatabaseSchema {
   users: User[];
@@ -268,6 +1163,8 @@ interface DatabaseSchema {
   questions: Question[];
   worksheets: Worksheet[];
   levelWorksheets: LevelWorksheet[];
+  levelHtmlTemplates: LevelHtmlTemplate[];
+  questionBank: QuestionBankEntry[];
   answerSubmissions: AnswerSubmission[];
   evaluationReports: EvaluationReport[];
   tickets: Ticket[];
@@ -275,6 +1172,19 @@ interface DatabaseSchema {
   announcements: Announcement[];
   interventions: Intervention[];
   bestPractices: BestPractice[];
+  diagnosticAnswerKeys: DiagnosticAnswerKey[];
+  certifications: Certification[];
+  competencyRequirements: CompetencyRequirement[];
+  misconceptionClusters: MisconceptionCluster[];
+  testHistory: TestHistoryEntry[];
+  questionLogics: QuestionLogic[];
+  questionTemplates: QuestionTemplate[];
+  questionOptions: QuestionOption[];
+  curriculumLevels: CurriculumLevel[];
+  studentCycleLocks: StudentCycleLock[];
+  generationWindows: WorksheetGenerationWindow[];
+  teacherObservationRecords: TeacherObservationRecord[];
+  attemptRecords: AttemptRecord[];
 }
 
 const COLLECTION_NAMES: Record<keyof DatabaseSchema, string> = {
@@ -284,44 +1194,294 @@ const COLLECTION_NAMES: Record<keyof DatabaseSchema, string> = {
   students: 'students',
   questions: 'questions',
   worksheets: 'worksheets',
-  answerSubmissions: 'answer_submissions',
-  evaluationReports: 'evaluation_reports',
+  levelWorksheets: 'levelWorksheets',
+  levelHtmlTemplates: 'levelHtmlTemplates',
+  questionBank: 'questionBank',
+  answerSubmissions: 'answerSubmissions',
+  evaluationReports: 'evaluationReports',
   tickets: 'tickets',
   logbook: 'logbook',
   announcements: 'announcements',
   interventions: 'interventions',
-  bestPractices: 'best_practices',
+  bestPractices: 'bestPractices',
+  diagnosticAnswerKeys: 'diagnostic_answer_keys',
+  certifications: 'certifications',
+  competencyRequirements: 'competencyRequirements',
+  misconceptionClusters: 'misconception_clusters',
+  testHistory: 'testHistory',
+  questionLogics: 'questionLogics',
+  questionTemplates: 'questionTemplates',
+  questionOptions: 'questionOptions',
+  curriculumLevels: 'curriculumLevels',
+  studentCycleLocks: 'studentCycleLocks',
+  generationWindows: 'generationWindows',
+  teacherObservationRecords: 'teacher_observation_records',
+  attemptRecords: 'attempt_records',
 };
+
+/**
+ * Aadhaar-sensitive fields that may ONLY be written by the tokenized creation
+ * path (routes/students.ts → createStudentFromData via addStudent). Every key
+ * that could carry a raw number, a vault reference, or the mask is listed so
+ * updateStudent()'s generic $set can never reintroduce plaintext or clobber
+ * vault references through a future, less careful caller.
+ *
+ * Deliberately broader than the Student interface: includes legacy/spelling
+ * variants (`aadhar`, `aadhaarNumber`) that a well-meaning future contributor
+ * might reach for.
+ */
+const AADHAAR_PROTECTED_UPDATE_FIELDS: readonly string[] = [
+  'aadhaar',
+  'aadhar',
+  'aadharNumber',
+  'aadhaarNumber',
+  'aadhaarTokenId',
+  'aadhaarIdentityId',
+  'aadharMasked',
+];
+
+/**
+ * Collapse multiple `Question` rows that share the same `question_id` into a
+ * single row, comma-joining their `answer` values so no information is lost.
+ *
+ * The diagnostic paper can be assembled from several sources (cached
+ * `assignedDiagnosticQuestions`, the freshly-generated class paper, the
+ * `questionBank` collection). When those paths overlap the same question
+ * can appear more than once. Without deduping, the OCR scan would treat
+ * the duplicate as a separate row, inflate the total count, and silently
+ * double-count correct/incorrect in the donut.
+ *
+ * Behavior:
+ *   - First occurrence of each `question_id` wins for the metadata fields
+ *     (conceptId, source_level, topic, ...).
+ *   - Subsequent duplicates contribute their `answer` value to a comma-
+ *     separated list on the merged row (de-duplicated within the join so
+ *     the same answer string isn't repeated).
+ *   - Order of the original list is preserved (first-seen order), so
+ *     downstream iteration matches the paper the student was actually shown.
+ */
+export function dedupeQuestionsById(questions: Question[]): Question[] {
+  const byId = new Map<string, Question>();
+  const order: string[] = [];
+  for (const q of questions) {
+    const id = q.question_id;
+    if (!id) continue;
+    if (!byId.has(id)) {
+      order.push(id);
+      byId.set(id, { ...q });
+      continue;
+    }
+    const existing = byId.get(id)!;
+    const parts = new Set<string>();
+    const existingParts = String(existing.answer ?? '').split(',').map(s => s.trim()).filter(Boolean);
+    existingParts.forEach(p => parts.add(p));
+    const incoming = String(q.answer ?? '').split(',').map(s => s.trim()).filter(Boolean);
+    incoming.forEach(p => parts.add(p));
+    existing.answer = Array.from(parts).join(', ');
+  }
+  return order.map(id => byId.get(id)!);
+}
 
 export class DBStore {
   private data: DatabaseSchema | null = null;
   public useMongo: boolean = false;
   private mongoDb: Db | null = null;
 
-  getDb() {
-    if (!mongoClient) throw new Error('MongoDB not connected');
-    return mongoClient.db();
+  getDb(): Db | null {
+    if (this.mongoDb) return this.mongoDb;
+    if (mongoClient) {
+      const dbName = process.env.MONGODB_DB_NAME;
+      this.mongoDb = dbName ? mongoClient.db(dbName) : mongoClient.db();
+      return this.mongoDb;
+    }
+    return null;
+  }
+
+  // Generic key-value config store. Keys are arbitrary strings; values
+  // are arbitrary JSON-serializable blobs. Stored in MongoDB collection
+  // `appConfig` ({_id: key, value}). Used for runtime config like
+  // ICR_CLOUD_API_KEY_GOOGLE etc that admins set via the API instead
+  // of environment variables.
+  async getConfig(key: string): Promise<any> {
+    const db = this.getDb();
+    if (!db) return null;
+    const doc = await db.collection('appConfig').findOne({ _id: key } as any);
+    return doc?.value ?? null;
+  }
+
+  async setConfig(key: string, value: any): Promise<void> {
+    const db = this.getDb();
+    if (!db) throw new Error('MongoDB not connected');
+    await db.collection('appConfig').updateOne(
+      { _id: key } as any,
+      { $set: { value, updatedAt: new Date() } },
+      { upsert: true }
+    );
   }
 
   async init() {
     if (mongoClient) {
-      console.log('Loading data from MongoDB...');
-      this.mongoDb = mongoClient.db();
-      const db = this.mongoDb;
-      this.data = {} as DatabaseSchema;
-      for (const [key, collName] of Object.entries(COLLECTION_NAMES)) {
-        const docs = await db.collection(collName).find().toArray();
-        (this.data as any)[key] = docs.map(({ _id, ...rest }) => rest);
+      try {
+        const dbName = process.env.MONGODB_DB_NAME;
+        this.mongoDb = dbName ? mongoClient.db(dbName) : mongoClient.db();
+        this.data = {} as DatabaseSchema;
+        const db = this.mongoDb;
+
+        // Ensure diagnostic_answer_keys collection is explicitly created in MongoDB
+        try {
+          const collections = await db.listCollections({ name: 'diagnostic_answer_keys' }).toArray();
+          if (collections.length === 0) {
+            await db.createCollection('diagnostic_answer_keys');
+            console.log('Explicitly created MongoDB collection "diagnostic_answer_keys"');
+          }
+        } catch (e: any) {
+          console.warn('Collection check info:', e.message);
+        }
+
+        // Ensure indexes on students collection for performance
+        try {
+          const studentsColl = db.collection('students');
+          await studentsColl.createIndex({ id: 1 }, { unique: true });
+          await studentsColl.createIndex({ schoolId: 1 });
+          await studentsColl.createIndex({ teacherId: 1 });
+          await studentsColl.createIndex({ aadharMasked: 1 });
+          // Phase 2 hardening: layer-2 duplicate detection queries this field
+          // on every registration (routes/students.ts → getExistingAadhaar-
+          // IdentityIds). Deliberately NON-unique for now: legacy records may
+          // predate aadhaarIdentityId or contain duplicate values, and a
+          // unique constraint introduced blind would turn reads/writes of
+          // those rows into errors. Revisit uniqueness only after
+          // scripts/audit-aadhaar-at-rest.ts reports the data is clean.
+          await studentsColl.createIndex({ aadhaarIdentityId: 1 });
+          // Case-insensitive search indexes for the Aadhaar Reveal / admin
+          // student search. The route's $or uses BSON range ({$gte: $lt})
+          // on these six fields; the index collation lets the range scan
+          // be case-insensitive, and the index OR uses one IXSCAN per
+          // branch. Without these, an 86k-row collection would COLLSCAN
+          // on every keystroke. The same collation must be set on the
+          // cursor (see getStudents) — a strength:2 index compared with
+          // the simple-binary default ignores the index entirely.
+          // The choice of strength:2 (case + accent insensitive but
+          // still case-folded for ordering) is a deliberate compromise:
+          // full case+accent insensitive would be strength:1, but
+          // school/class identifiers do carry case information some
+          // admins rely on, and strength:1 would also make 'a' and 'ä'
+          // indistinguishable, which is wrong for names. Strength:2 is
+          // the standard for "case-insensitive prefix search".
+          const searchCollation = { locale: 'en', strength: 2 };
+          for (const f of ['name', 'displayId', 'aadharMasked', 'schoolId', 'classGroup', 'section']) {
+            await studentsColl.createIndex({ [f]: 1 }, { collation: searchCollation, name: f + '_ci' });
+          }
+          console.log('Successfully ensured indexes on "students" collection');
+        } catch (e: any) {
+          console.warn('Failed to ensure indexes on "students" collection:', e.message);
+        }
+
+        // Ensure indexes on users collection for performance
+        try {
+          const usersColl = db.collection('users');
+          await usersColl.createIndex({ id: 1 }, { unique: true });
+          await usersColl.createIndex({ email: 1 }, { unique: true });
+          console.log('Successfully ensured indexes on "users" collection');
+        } catch (e: any) {
+          console.warn('Failed to ensure indexes on "users" collection:', e.message);
+        }
+
+        // Ensure indexes on the authoring collections.
+        //
+        // `questionLogics` has never carried any index, including on `id`,
+        // which `getQuestionLogicById` queries by. Added here alongside the
+        // new collection rather than left for later.
+        try {
+          const logicsColl = db.collection('questionLogics');
+          await logicsColl.createIndex({ id: 1 }, { unique: true });
+
+          const templatesColl = db.collection('questionTemplates');
+          await templatesColl.createIndex({ id: 1 }, { unique: true });
+          await templatesColl.createIndex({ conceptId: 1, deletedAt: 1 });
+          await templatesColl.createIndex({ variantKey: 1, deletedAt: 1 });
+          await templatesColl.createIndex({ tags: 1, deletedAt: 1 });
+          await templatesColl.createIndex({ paramMode: 1, deletedAt: 1 });
+          // Multikey indexes: "which questions test skill X" / "...subskill X" is a
+          // direct index lookup, not a table scan across every question×skill pair —
+          // the key-value structure this collection already is, made queryable by it.
+          await templatesColl.createIndex({ skills: 1, deletedAt: 1 });
+          await templatesColl.createIndex({ subskills: 1, deletedAt: 1 });
+          await templatesColl.createIndex({ assessmentMode: 1, deletedAt: 1 });
+
+          const optionsColl = db.collection('questionOptions');
+          await optionsColl.createIndex({ id: 1 }, { unique: true });
+          await optionsColl.createIndex({ type: 1, active: 1 });
+
+          // Balvatika teacher-observation records (PR #517 §4/§4b) — see the
+          // TeacherObservationRecord interface for why this is a separate
+          // collection from answerSubmissions.
+          const obsColl = db.collection('teacher_observation_records');
+          await obsColl.createIndex({ id: 1 }, { unique: true });
+          await obsColl.createIndex({ studentId: 1, conceptId: 1, cycle: 1 }, { unique: true });
+          await obsColl.createIndex({ classId: 1, cycle: 1 });
+          await obsColl.createIndex({ conceptId: 1 });
+
+          console.log('Successfully ensured indexes on the question authoring collections');
+        } catch (e: any) {
+          console.warn('Failed to ensure indexes on the question authoring collections:', e.message);
+        }
+
+        // Ensure indexes on evaluationReports collection for performance
+        try {
+          const reportsColl = db.collection('evaluationReports');
+          await reportsColl.createIndex({ studentId: 1 });
+          console.log('Successfully ensured indexes on "evaluationReports" collection');
+        } catch (e: any) {
+          console.warn('Failed to ensure indexes on "evaluationReports" collection:', e.message);
+        }
+
+        // #479: getAttemptRecordsForStudent is the only read today, keyed
+        // by studentId.
+        try {
+          await db.collection('attempt_records').createIndex({ studentId: 1 });
+          console.log('Successfully ensured indexes on "attempt_records" collection');
+        } catch (e: any) {
+          console.warn('Failed to ensure indexes on "attempt_records" collection:', e.message);
+        }
+
+        for (const [key, collName] of Object.entries(COLLECTION_NAMES)) {
+          (this.data as any)[key] = [];
+        }
+        // Load users into memory for sync auth lookups (getUserSync)
+        this.data.users = await db.collection<User>('users').find({}, { projection: { password: 0 } }).toArray();
+        const userCount = this.data.users.length;
+        const schoolCount = await db.collection('schools').countDocuments();
+        const studentCount = await db.collection('students').countDocuments();
+
+        // If MongoDB Atlas users collection is empty, merge local seed users into memory without modifying MongoDB
+        if (userCount === 0) {
+          const seed = this.getSeedData();
+          this.data.users = seed.users;
+        }
+        console.log(`MongoDB ready: ${userCount} users in Atlas (${this.data.users.length} active), ${schoolCount} schools, ${studentCount} students`);
+        return;
+      } catch (err: any) {
+        console.warn(`MongoDB initialization failed (${err.message}) — falling back to local file DB.`);
+        this.mongoDb = null;
+        mongoClient = null;
       }
-      console.log(`MongoDB loaded: ${this.data.users?.length || 0} users, ${this.data.schools?.length || 0} schools, ${this.data.students?.length || 0} students`);
     } else {
       console.log('No MongoDB — falling back to file-based DB');
       try {
         await fs.mkdir(DB_DIR, { recursive: true });
-      } catch (_) {}
+      } catch (_) { }
       try {
         const content = await fs.readFile(DB_FILE, 'utf-8');
-        this.data = JSON.parse(content);
+        const parsed = JSON.parse(content);
+        // A db.json written before a collection was added to DatabaseSchema
+        // has no key for it, so the file-store branches below would throw on
+        // `this.data.<collection>.push(...)`. Default any missing collection
+        // to empty; COLLECTION_NAMES is typed to list every schema key.
+        for (const key of Object.keys(COLLECTION_NAMES) as (keyof DatabaseSchema)[]) {
+          if (!Array.isArray(parsed[key])) parsed[key] = [];
+        }
+        this.data = parsed;
       } catch (_) {
         this.data = this.getSeedData();
         await this.save();
@@ -337,6 +1497,7 @@ export class DBStore {
   private async persistCollection(key: keyof DatabaseSchema) {
     if (!this.data || !mongoClient) return;
     const db = this.getDb();
+    if (!db) return;
     const collName = COLLECTION_NAMES[key];
     const items = (this.data as any)[key] || [];
     const coll = db.collection(collName);
@@ -350,6 +1511,7 @@ export class DBStore {
     this.data = this.getSeedData();
     if (mongoClient) {
       const db = this.getDb();
+      if (!db) return;
       for (const [key, collName] of Object.entries(COLLECTION_NAMES)) {
         const items = (this.data as any)[key] || [];
         const coll = db.collection(collName);
@@ -370,60 +1532,1082 @@ export class DBStore {
     return this.data.users.find(u => u.email.toLowerCase() === email.toLowerCase()) || null;
   }
 
+  async getUserByEmail(email: string): Promise<User | null> {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (this.mongoDb) {
+      try {
+        // Anchored regex with the email field. The `email` field has a regular
+        // index from init(); a fully-anchored regex on an indexed field still
+        // scans the index, but the index is keyed on the value so it's bounded.
+        const u = await this.mongoDb.collection<User>('users').findOne({
+          email: { $regex: new RegExp(`^${cleanEmail.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')}$`, 'i') }
+        });
+        if (u) {
+          if (this.data && this.data.users) {
+            const idx = this.data.users.findIndex(x => x.email.toLowerCase() === cleanEmail || x.id === u.id);
+            if (idx >= 0) this.data.users[idx] = u;
+            else this.data.users.push(u);
+          }
+          return u;
+        }
+      } catch (_) { }
+    }
+    return this.getUserSync(cleanEmail);
+  }
+
   async getUsers() {
-    return await this.mongoDb!.collection<User>('users').find({}).toArray();
+    if (this.mongoDb) return await this.mongoDb.collection<User>('users').find({}).toArray();
+    return this.data?.users || [];
   }
   async getSchools() {
-    return await this.mongoDb!.collection<School>('schools').find({}).toArray();
+    if (this.mongoDb) return await this.mongoDb.collection<School>('schools').find({}).toArray();
+    return this.data?.schools || [];
+  }
+  async getSchoolById(id: string): Promise<School | null> {
+    if (!id) return null;
+    if (this.mongoDb) return (await this.mongoDb.collection<School>('schools').findOne({ id })) as School | null;
+    return (this.data?.schools || []).find(sc => sc.id === id) ?? null;
   }
   async getClasses() {
-    return await this.mongoDb!.collection<ClassGroup>('classes').find({}).toArray();
+    if (this.mongoDb) return await this.mongoDb.collection<ClassGroup>('classes').find({}).toArray();
+    return this.data?.classes || [];
   }
-  async getStudents() {
-    return await this.mongoDb!.collection<Student>('students').find({}).toArray();
+  async getStudents(opts?: { limit?: number; offset?: number; schoolId?: string | string[]; teacherId?: string; sort?: 'latest'; q?: string }) {
+    // Search must run BEFORE limit/offset. A previous version of this
+    // function only sorted/paged, and the caller (routes/students.ts)
+    // applied the search AFTER the paged result had been returned. On an
+    // 86,400-row collection that meant a search match at position 500
+    // would never appear in the page (the first 10 were the 10 most-recent
+    // inserts, with no guarantee any of them matched). The result was a
+    // panel that "did nothing" as the user typed. Pushing the search
+    // here means the same query Mongo/JS does is also the one that
+    // pagination slices.
+    const search = (opts?.q || '').trim().toLowerCase();
+    if (this.mongoDb) {
+      const filter: any = {};
+      if (opts?.schoolId) {
+        if (Array.isArray(opts.schoolId)) {
+          filter.schoolId = { $in: opts.schoolId };
+        } else {
+          filter.schoolId = opts.schoolId;
+        }
+      }
+      if (opts?.teacherId) filter.teacherId = opts.teacherId;
+      if (search) {
+        // Case-insensitive PREFIX match on the same six fields the panel
+        // advertises. The previous version used an unanchored case-insensitive
+        // regex (e.g. /foo/i), which CANNOT use a B-tree index in this
+        // MongoDB version — every keystroke COLLSCAN'd the 86k-row
+        // collection. The fix is a BSON range { $gte: prefix, $lt: prefix+'￿' }
+        // combined with a strength:2 collation on the cursor. Combined with
+        // the matching collation-aware indexes (see the `init()` block
+        // above), Mongo uses index OR (one IXSCAN per $or branch) and the
+        // search runs in single-digit ms.
+        //
+        // The semantic change is "prefix" instead of "substring" — typing
+        // "kar" still finds "Kartik", but typing "artik" no longer matches
+        // "Kartik" via a mid-string substring. This is the smallest
+        // architecturally correct change that preserves the user-typed
+        // search box; the API contract (the ?q= parameter) is unchanged.
+        // The in-memory (file-fallback) path below mirrors this with
+        // .startsWith() so dev and prod return the same results.
+        const prefix = search;
+        const upper = prefix + '￿';
+        filter.$or = [
+          { name:        { $gte: prefix, $lt: upper } },
+          { displayId:   { $gte: prefix, $lt: upper } },
+          { aadharMasked:{ $gte: prefix, $lt: upper } },
+          { schoolId:    { $gte: prefix, $lt: upper } },
+          { classGroup:  { $gte: prefix, $lt: upper } },
+          { section:     { $gte: prefix, $lt: upper } },
+        ];
+      }
+      const skip = opts?.offset || 0;
+      const limit = opts?.limit || 0;
+      const cursor = this.mongoDb.collection<Student>('students').find(filter);
+      // When the query has a search, use the same collation as the
+      // `*_ci` indexes above. Without this, Mongo falls back to the
+      // simple-binary collation, the index OR is unusable, and we
+      // COLLSCAN the whole collection. With it, index OR turns 6
+      // COLLSCANs into 6 IXSCANs (~1ms each on 86k rows).
+      if (search) cursor.collation({ locale: 'en', strength: 2 });
+      // `sort: 'latest'` returns most-recently-inserted first. In Mongo
+      // the natural `_id` ObjectId is time-prefixed, so a descending
+      // sort gives the same intent as "newest at the top" in the
+      // file-fallback store (where students are `push`ed to the array
+      // and we reverse the result). Other sort modes are intentionally
+      // not exposed — the route layer is the only place that names
+      // sort orders.
+      if (opts?.sort === 'latest') cursor.sort({ _id: -1 });
+      if (skip) cursor.skip(skip);
+      if (limit) cursor.limit(limit);
+      return await cursor.toArray();
+    }
+    let result = this.data?.students || [];
+    if (opts?.schoolId) {
+      const wanted = Array.isArray(opts.schoolId) ? opts.schoolId : [opts.schoolId];
+      result = result.filter(s => wanted.includes(s.schoolId));
+    }
+    if (opts?.teacherId) result = result.filter(s => s.teacherId === opts.teacherId);
+    if (search) {
+      // Same six fields, same case-insensitive PREFIX semantics as the
+      // Mongo $or above (see comment in the Mongo branch). The previous
+      // version used `.includes()` (substring); the new Mongo path is
+      // BSON range + collation, which is prefix-only. We mirror that
+      // here with `.startsWith()` so dev (file-fallback) and prod
+      // (Mongo) return the same rows for the same `q` — otherwise a
+      // dev who types "artik" sees "Kartik" in their file-fallback
+      // results but a prod deploy would not, and vice versa.
+      result = result.filter(s => {
+        const fields = [
+          s.name, s.displayId, s.aadharMasked, s.schoolId, s.classGroup, s.section,
+        ];
+        for (const v of fields) {
+          if (v != null && String(v).toLowerCase().startsWith(search)) return true;
+        }
+        return false;
+      });
+    }
+    // For the file-fallback store, students are appended to the array
+    // on insert, so the array is in chronological order. Reversing it
+    // gives "latest first" — matching the Mongo sort({ _id: -1 })
+    // path.
+    if (opts?.sort === 'latest') result = [...result].reverse();
+    if (opts?.offset) result = result.slice(opts.offset);
+    if (opts?.limit) result = result.slice(0, opts.limit);
+    return result;
+  }
+  /**
+   * One student by business id, without pulling the collection.
+   *
+   * `getStudents()` ships all 86k student documents to the caller; anything
+   * that needs a single child (archetype assignment runs once per evaluation,
+   * and once per student inside the bulk ICR loop) must not pay that.
+   */
+  async getStudentById(id: string): Promise<Student | null> {
+    if (this.mongoDb) {
+      return await this.mongoDb.collection<Student>('students').findOne({ id });
+    }
+    return (this.data?.students || []).find(s => s.id === id) || null;
+  }
+  async countStudents(opts?: { schoolId?: string | string[]; teacherId?: string; q?: string }) {
+    // Mirrors getStudents' search semantics so the route's X-Total-Count
+    // header reflects the full match count, not the post-pagination
+    // page count. The previous version took no `q` and the route fell
+    // back to `masked.length` (the post-page count) — same
+    // whole-collection / first-page mismatch that broke the search.
+    const search = (opts?.q || '').trim().toLowerCase();
+    if (this.mongoDb) {
+      const filter: any = {};
+      if (opts?.schoolId) filter.schoolId = Array.isArray(opts.schoolId) ? { $in: opts.schoolId } : opts.schoolId;
+      if (opts?.teacherId) filter.teacherId = opts.teacherId;
+      if (search) {
+        // Mirror the BSON-range + collation pattern from getStudents
+        // exactly. countStudents drives the route's X-Total-Count
+        // header, and it MUST match the page's filter — otherwise
+        // pagination shows the wrong total. With the same $or and
+        // the same collation, Mongo uses the same six IXSCANs as
+        // the find, so the count is also single-digit ms on 86k rows.
+        const prefix = search;
+        const upper = prefix + '￿';
+        filter.$or = [
+          { name:        { $gte: prefix, $lt: upper } },
+          { displayId:   { $gte: prefix, $lt: upper } },
+          { aadharMasked:{ $gte: prefix, $lt: upper } },
+          { schoolId:    { $gte: prefix, $lt: upper } },
+          { classGroup:  { $gte: prefix, $lt: upper } },
+          { section:     { $gte: prefix, $lt: upper } },
+        ];
+      }
+      // Same collation as the find; required for the *_ci indexes.
+      // Without the search path, countDocuments hits the existing
+      // schoolId/teacherId indexes and does not need a collation.
+      if (search) {
+        return await this.mongoDb.collection('students').countDocuments(filter, { collation: { locale: 'en', strength: 2 } });
+      }
+      return await this.mongoDb.collection('students').countDocuments(filter);
+    }
+    let result = this.data?.students || [];
+    if (opts?.schoolId) { const ids = ([] as string[]).concat(opts.schoolId); result = result.filter(s => ids.includes(s.schoolId)); }
+    if (opts?.teacherId) result = result.filter(s => s.teacherId === opts.teacherId);
+    if (search) {
+      // Same prefix-only semantics as getStudents' in-memory path.
+      result = result.filter(s => {
+        const fields = [
+          s.name, s.displayId, s.aadharMasked, s.schoolId, s.classGroup, s.section,
+        ];
+        for (const v of fields) {
+          if (v != null && String(v).toLowerCase().startsWith(search)) return true;
+        }
+        return false;
+      });
+    }
+    return result.length;
+  }
+
+
+  /**
+   * Fast aggregation: count of students, optionally filtered.
+   * Uses MongoDB countDocuments (uses index, no docs loaded).
+   */
+  async countStudentsFast(opts?: { schoolId?: string; currentLevelMin?: number }): Promise<number> {
+    if (this.mongoDb) {
+      const filter: any = {};
+      if (opts?.schoolId) filter.schoolId = opts.schoolId;
+      if (opts?.currentLevelMin != null) filter.currentLevel = { $gte: opts.currentLevelMin };
+      return await this.mongoDb.collection('students').countDocuments(filter);
+    }
+    let result = this.data?.students || [];
+    if (opts?.schoolId) result = result.filter(s => s.schoolId === opts.schoolId);
+    if (opts?.currentLevelMin != null) result = result.filter(s => (s.currentLevel || 0) >= opts.currentLevelMin!);
+    return result.length;
+  }
+
+  /** Fast count of schools with optional filters. */
+  async countSchoolsFast(opts?: { stateCode?: string; schoolType?: string; accessLocked?: boolean }): Promise<number> {
+    if (this.mongoDb) {
+      const filter: any = {};
+      if (opts?.stateCode) filter.stateCode = opts.stateCode;
+      if (opts?.schoolType) filter.schoolType = opts.schoolType;
+      if (opts?.accessLocked != null) filter.accessLocked = opts.accessLocked;
+      return await this.mongoDb.collection('schools').countDocuments(filter);
+    }
+    let result = (this.data?.schools || []) as any[];
+    if (opts?.stateCode) result = result.filter((s: any) => s.stateCode === opts!.stateCode);
+    if (opts?.schoolType) result = result.filter((s: any) => s.schoolType === opts!.schoolType);
+    if (opts?.accessLocked != null) result = result.filter((s: any) => s.accessLocked === opts!.accessLocked);
+    return result.length;
+  }
+
+  /** Fast count of users by role. Returns { role: count }. */
+  async countUsersByRole(): Promise<Record<string, number>> {
+    if (this.mongoDb) {
+      const result = await this.mongoDb.collection('users').aggregate([
+        { $group: { _id: '$role', count: { $sum: 1 } } }
+      ]).toArray();
+      const counts: Record<string, number> = {};
+      result.forEach(r => { counts[r._id] = r.count; });
+      return counts;
+    }
+    const counts: Record<string, number> = {};
+    (this.data?.users || []).forEach(u => {
+      const r = u.role || 'unknown';
+      counts[r] = (counts[r] || 0) + 1;
+    });
+    return counts;
+  }
+
+  /**
+   * Fast aggregation: school counts grouped by stateCode.
+   * Returns [{ stateCode, count }] sorted by count desc.
+   */
+  async countSchoolsByState(): Promise<Array<{ stateCode: string; count: number }>> {
+    if (this.mongoDb) {
+      const result = await this.mongoDb.collection('schools').aggregate([
+        { $group: { _id: '$stateCode', count: { $sum: 1 } } },
+        { $sort: { count: -1 } }
+      ]).toArray();
+      return result.map(r => ({ stateCode: r._id || 'UNKNOWN', count: r.count }));
+    }
+    const counts: Record<string, number> = {};
+    (this.data?.schools || []).forEach(s => {
+      const sc = s.stateCode || 'UNKNOWN';
+      counts[sc] = (counts[sc] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([stateCode, count]) => ({ stateCode, count }))
+      .sort((a, b) => b.count - a.count);
+  }
+
+  /** Fast aggregation: school counts grouped by schoolType. */
+  async countSchoolsByType(): Promise<Array<{ schoolType: string; count: number }>> {
+    if (this.mongoDb) {
+      const result = await this.mongoDb.collection('schools').aggregate([
+        { $group: { _id: '$schoolType', count: { $sum: 1 } } }
+      ]).toArray();
+      return result.map(r => ({ schoolType: r._id || 'Unknown', count: r.count }));
+    }
+    const counts: Record<string, number> = {};
+    ((this.data?.schools || []) as any[]).forEach(s => {
+      const t = s.schoolType || 'Unknown';
+      counts[t] = (counts[t] || 0) + 1;
+    });
+    return Object.entries(counts).map(([schoolType, count]) => ({ schoolType, count }));
+  }
+
+  /** Fast aggregation: student count per school (for ranking). Returns top N. */
+  async getSchoolStudentCounts(): Promise<Map<string, number>> {
+    if (this.mongoDb) {
+      const result = await this.mongoDb.collection('students').aggregate([
+        { $group: { _id: '$schoolId', count: { $sum: 1 }, avgLevel: { $avg: '$currentLevel' } } }
+      ]).toArray();
+      const map = new Map<string, number>();
+      result.forEach(r => { map.set(r._id, r.count); });
+      return map;
+    }
+    const counts = new Map<string, number>();
+    (this.data?.students || []).forEach(s => {
+      counts.set(s.schoolId, (counts.get(s.schoolId) || 0) + 1);
+    });
+    return counts;
+  }
+
+  /**
+   * Per-school evaluation aggregates, for the executive school table.
+   *
+   * One pipeline over `students` (indexed on `schoolId`) that looks each
+   * child's reports up through the `evaluationReports.studentId` index, so
+   * the whole table costs a single server-side query rather than one query
+   * per school.
+   *
+   * A report counts as passed when the child got at least half the questions
+   * right. `score` is a correct-answer count on every production writer
+   * (routes/evaluation.ts, routes/students.ts, the teacher-override endpoint)
+   * measured against `totalQuestions`, so the ratio — not a raw
+   * `score >= 50` — is the comparison that holds across papers of any length.
+   * This is the same normalisation WorksheetsPanel.tsx already uses.
+   */
+  async getSchoolEvaluationStats(): Promise<Map<string, { students: number; assessedStudents: number; reports: number; passed: number }>> {
+    const empty = () => ({ students: 0, assessedStudents: 0, reports: 0, passed: 0 });
+    if (this.mongoDb) {
+      // Reads `evaluationReports` — the collection every live writer targets
+      // (addEvaluationReport, updateEvaluationReport, getEvaluationReports,
+      // and the studentId index in ensureIndexes).
+      const result = await this.mongoDb.collection('students').aggregate([
+        { $lookup: { from: 'evaluationReports', localField: 'id', foreignField: 'studentId', as: 'reports' } },
+        {
+          $project: {
+            schoolId: 1,
+            reportCount: { $size: '$reports' },
+            passedCount: {
+              $size: {
+                $filter: {
+                  input: '$reports',
+                  as: 'r',
+                  // $cond rather than $and so the divide is only evaluated when
+                  // totalQuestions is non-zero — $and does not short-circuit
+                  // and $divide by zero is an error, not a null.
+                  cond: {
+                    $cond: [
+                      { $gt: [{ $ifNull: ['$$r.totalQuestions', 0] }, 0] },
+                      { $gte: [{ $divide: ['$$r.score', '$$r.totalQuestions'] }, 0.5] },
+                      false,
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          $group: {
+            _id: '$schoolId',
+            students: { $sum: 1 },
+            assessedStudents: { $sum: { $cond: [{ $gt: ['$reportCount', 0] }, 1, 0] } },
+            reports: { $sum: '$reportCount' },
+            passed: { $sum: '$passedCount' },
+          }
+        }
+      ]).toArray();
+      const map = new Map<string, { students: number; assessedStudents: number; reports: number; passed: number }>();
+      result.forEach((r: any) => {
+        if (!r._id) return;
+        map.set(r._id, { students: r.students, assessedStudents: r.assessedStudents, reports: r.reports, passed: r.passed });
+      });
+      return map;
+    }
+    // JSON fallback store: the same four numbers, over the in-memory copy.
+    const stats = new Map<string, { students: number; assessedStudents: number; reports: number; passed: number }>();
+    const schoolByStudent = new Map<string, string>();
+    (this.data?.students || []).forEach(s => {
+      if (!s.schoolId) return;
+      schoolByStudent.set(s.id, s.schoolId);
+      const row = stats.get(s.schoolId) || empty();
+      row.students += 1;
+      stats.set(s.schoolId, row);
+    });
+    const assessed = new Set<string>();
+    (this.data?.evaluationReports || []).forEach(r => {
+      const schoolId = schoolByStudent.get(r.studentId);
+      if (!schoolId) return;
+      const row = stats.get(schoolId)!;
+      // Distinct students, so a child assessed several times still counts once.
+      if (!assessed.has(r.studentId)) {
+        assessed.add(r.studentId);
+        row.assessedStudents += 1;
+      }
+      row.reports += 1;
+      if ((r.totalQuestions || 0) > 0 && r.score / r.totalQuestions >= 0.5) row.passed += 1;
+    });
+    return stats;
+  }
+
+  /** Fast aggregation: count of evaluation reports. */
+  async countReports(): Promise<number> {
+    if (this.mongoDb) {
+      return await this.mongoDb.collection('evaluationReports').countDocuments({});
+    }
+    return (this.data?.evaluationReports || []).length;
+  }
+
+  /** Fast aggregation: count reports grouped by pass/fail (score >= 50). */
+  async countReportsByOutcome(): Promise<{ pass: number; fail: number; total: number; avgScore: number }> {
+    if (this.mongoDb) {
+      const result = await this.mongoDb.collection('evaluationReports').aggregate([
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            pass: { $sum: { $cond: [{ $gte: ['$score', 50] }, 1, 0] } },
+            avgScore: { $avg: '$score' }
+          }
+        }
+      ]).toArray();
+      if (result.length === 0) return { pass: 0, fail: 0, total: 0, avgScore: 0 };
+      const r = result[0];
+      return { pass: r.pass, fail: r.total - r.pass, total: r.total, avgScore: Math.round(r.avgScore || 0) };
+    }
+    const all = this.data?.evaluationReports || [];
+    const pass = all.filter(r => (r.score ?? 0) >= 50).length;
+    const avg = all.length > 0 ? all.reduce((s, r) => s + (r.score ?? 0), 0) / all.length : 0;
+    return { pass, fail: all.length - pass, total: all.length, avgScore: Math.round(avg) };
   }
   async getQuestions() {
-    return await this.mongoDb!.collection<Question>('questions').find({}).toArray();
+    if (this.mongoDb) return await this.mongoDb.collection<Question>('questions').find({}).toArray();
+    return this.data?.questions || [];
   }
   async getWorksheets() {
-    return await this.mongoDb!.collection<Worksheet>('worksheets').find({}).toArray();
+    if (this.mongoDb) return await this.mongoDb.collection<Worksheet>('worksheets').find({}).toArray();
+    return this.data?.worksheets || [];
+  }
+  /** Worksheets with the given ids; used to resolve the questions behind a student's evaluation reports. */
+  async getWorksheetsByIds(ids: string[]): Promise<Worksheet[]> {
+    if (ids.length === 0) return [];
+    if (this.mongoDb) return await this.mongoDb.collection<Worksheet>('worksheets').find({ id: { $in: ids } }).toArray();
+    const wanted = new Set(ids);
+    return (this.data?.worksheets || []).filter(w => wanted.has(w.id));
+  }
+  async getStudentCycleLocks() {
+    if (this.mongoDb) return await this.mongoDb.collection<StudentCycleLock>('studentCycleLocks').find({}).toArray();
+    return this.data?.studentCycleLocks || [];
+  }
+    async getGenerationWindows() {
+    if (this.mongoDb) return await this.mongoDb.collection<WorksheetGenerationWindow>('generationWindows').find({}).toArray();
+    return this.data?.generationWindows || [];
+  }
+  async getTestHistory(teacherId?: string) {
+    if (this.mongoDb) {
+      const filter = teacherId ? { teacherId } : {};
+      return await this.mongoDb.collection<TestHistoryEntry>('testHistory').find(filter).sort({ timestamp: -1 }).toArray();
+    }
+    const all = this.data?.testHistory || [];
+    const filtered = teacherId ? all.filter(t => t.teacherId === teacherId) : all;
+    return [...filtered].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   }
   async getLevelWorksheets() {
-    return await this.mongoDb!.collection<LevelWorksheet>('levelWorksheets').find({}).toArray();
+    if (this.mongoDb) return await this.mongoDb.collection<LevelWorksheet>('levelWorksheets').find({}).toArray();
+    return this.data?.levelWorksheets || [];
   }
+  async getLevelHtmlTemplates() {
+    if (this.mongoDb) return await this.mongoDb.collection<LevelHtmlTemplate>('levelHtmlTemplates').find({}).sort({ levelNumber: 1 }).toArray();
+    return this.data?.levelHtmlTemplates || [];
+  }
+  async getLevelHtmlTemplate(levelNumber: number) {
+    if (this.mongoDb) return await this.mongoDb.collection<LevelHtmlTemplate>('levelHtmlTemplates').findOne({ levelNumber });
+    return this.data?.levelHtmlTemplates?.find(t => t.levelNumber === levelNumber) || null;
+  }
+  async getQuestionBankByLevel(level: number) {
+    if (this.mongoDb) return await this.mongoDb.collection<QuestionBankEntry>('questionBank').find({ level }).toArray();
+    return [];
+  }
+  async getQuestionBankRandom(level: number, count: number) {
+    if (this.mongoDb) {
+      return await this.mongoDb.collection<QuestionBankEntry>('questionBank').aggregate([
+        { $match: { level } },
+        { $sample: { size: count } }
+      ]).toArray();
+    }
+    return [];
+  }
+
+  /**
+   * Returns all records from the canonical Question Bank (used for admin audit & integrity check).
+   * Queries MongoDB collection `questionBank` if connected; falls back to loading canonical
+   * data/questionBank.json in local file-DB mode or if Atlas is unseeded.
+   */
+  async getAllQuestionBank(): Promise<QuestionBankEntry[]> {
+    if (this.mongoDb) {
+      try {
+        const items = await this.mongoDb.collection<QuestionBankEntry>('questionBank').find({}).sort({ level: 1, questionNumber: 1 }).toArray();
+        if (items && items.length > 0) {
+          return items;
+        }
+      } catch (err: any) {
+        console.warn('Failed to query questionBank from MongoDB, attempting local fallback:', err?.message || err);
+      }
+    }
+    if (this.data?.questionBank && this.data.questionBank.length > 0) {
+      return this.data.questionBank;
+    }
+    // Fallback: load from canonical data/questionBank.json
+    try {
+      const candidates = [
+        path.resolve(__dirname, '../../data/questionBank.json'),
+        path.resolve(__dirname, '../../../data/questionBank.json'),
+        path.resolve(process.cwd(), 'data', 'questionBank.json'),
+        path.resolve(process.cwd(), '..', 'data', 'questionBank.json'),
+      ];
+      for (const p of candidates) {
+        try {
+          const content = await fs.readFile(p, 'utf-8');
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            if (this.data) this.data.questionBank = parsed;
+            return parsed;
+          }
+        } catch {
+          // continue checking next candidate path
+        }
+      }
+    } catch (err: any) {
+      console.error('Failed to load canonical questionBank.json:', err?.message || err);
+    }
+    return [];
+  }
+
+  /**
+     * Level range for a given class, per the FLN registry
+     * (see backend/src/config/curriculumMap.ts).
+     *
+     * Updated 2026-09-18 for PR #517 (the year-before-Class-1/"Balvatika" stage
+     * finalisation against NCF-FS), which added 15 nodes and moved 4 nodes into
+     * Stage 3, shifting every boundary below from L28 onward. The registry is
+     * now 109 levels, not 93 (L-to-S crosswalk, PR #554).
+     *
+     *   Pre-school 1:            1-8
+     *   Pre-school 2:            9-18
+     *   Year before Class 1:    19-46   (Pre-school 3, the Balvatika stage — see curriculumMap.ts)
+     *   Class 1:                47-60
+     *   Class 2:                61-77
+     *   Class 3:                78-91
+     *   Class 4:                92-109
+     *
+     * classNumber here is documented (db.ts CertificationEligibility etc.) as 2-4
+     * per SRS §3 — the classNumber<=1 branch exists but Class 1 / the year-before
+     * stage are not yet wired into real paper generation (see PR #517 §9: student
+     * + teacher-observation worksheet generation for that stage is still to be built).
+     */
+  static classLevelRange(classNumber: number): { min: number; max: number } {
+    if (classNumber <= 1) return { min: 47, max: 60 }; // class 1
+    if (classNumber === 2) return { min: 61, max: 77 };
+    if (classNumber === 3) return { min: 78, max: 91 };
+    return { min: 92, max: 109 }; // class 4 (and any >4 default)
+  }
+
+  /**
+   * Generate a 10-question FLN paper for the given class using real MongoDB Atlas
+   * `questionBank` documents. Each question is sourced from one level in the class's band.
+   *
+   * Default for class 2 was 22-31 (legacy); now correctly 43-61.
+   */
+  async generateClassPaperFromAtlas(studentId: string | undefined, classNumber: number): Promise<Question[]> {
+    const { min: minLevel, max: maxLevel } = DBStore.classLevelRange(classNumber);
+    const questions: Question[] = [];
+    for (let lvl = minLevel; lvl <= maxLevel && questions.length < 10; lvl++) {
+      let qDoc: any = null;
+      if (this.mongoDb) {
+        try {
+          const docs = await this.mongoDb.collection('questionBank').aggregate([
+            { $match: { level: lvl } },
+            { $sample: { size: 1 } }
+          ]).toArray();
+          if (docs && docs.length > 0) qDoc = docs[0];
+        } catch (_) { }
+      }
+      if (qDoc) {
+        questions.push({
+          question_id: `Q_L${lvl}_${qDoc.questionNumber || (questions.length + 1)}`,
+          question: qDoc.questionText || qDoc.question || `Level ${lvl} Problem`,
+          answer: String(qDoc.answer || '').trim(),
+          answer_type: 'number',
+          topic: qDoc.levelTitle || `Level ${lvl}`,
+          subtopic: qDoc.section || `Section ${lvl}.0`,
+          difficulty: 'medium',
+          source_level: lvl,
+          // Authoritative concept identity for this curriculum level. Metadata
+          // only — it does not affect the question, its answer or its level.
+          conceptId: CURRICULUM_MAPPING[lvl]?.conceptId
+        });
+      } else {
+        // Deterministic fallback so the generated paper still has a valid answer key
+        // even when questionBank has no docs for this level.
+        const a = lvl;
+        const b = (lvl % 7) + 2;
+        questions.push({
+          question_id: `Q_L${lvl}_${questions.length + 1}`,
+          question: `Level ${lvl}: Calculate ${a} + ${b} = ?`,
+          answer: String(a + b),
+          answer_type: 'number',
+          // Mirror the qDoc branch above: derive the topic string from the
+          // canonical CURRICULUM_MAPPING entry (e.g. "Flexible
+          // Classification" for level 22). Without this, the offline
+          // fallback produced a misleading placeholder ("Level 22 Number
+          // Operations") that the Python pipeline rendered verbatim,
+          // making the narrative disagree with the paper's conceptId.
+          topic: CURRICULUM_MAPPING[lvl]?.levelTitle || `Level ${lvl}`,
+          subtopic: 'Addition',
+          difficulty: 'medium',
+          source_level: lvl,
+          // Same authoritative concept identity on the offline fallback item.
+          conceptId: CURRICULUM_MAPPING[lvl]?.conceptId
+        });
+      }
+    }
+
+    if (studentId && questions.length > 0) {
+      await this.assignDiagnosticPaperToStudent(studentId, questions);
+    }
+    return questions;
+  }
+
+  /**
+   * Back-compat: legacy callers (paperGenerator.ts line ~147) pass classNumber=2.
+   * Routes through the new class-aware generator.
+   */
+  async generateClass2PaperFromAtlas(studentId?: string): Promise<Question[]> {
+    return await this.generateClassPaperFromAtlas(studentId, 2);
+  }
+  async assignDiagnosticPaperToStudent(studentId: string, questions: Question[]) {
+    if (this.mongoDb) {
+      try {
+        await this.mongoDb.collection('students').updateOne(
+          { id: studentId },
+          { $set: { assignedDiagnosticQuestions: questions } }
+        );
+      } catch (e) {
+        console.warn('Failed to persist assigned paper to MongoDB student:', e);
+      }
+    }
+    if (this.data && this.data.students) {
+      const st = this.data.students.find(s => s.id === studentId);
+      if (st) st.assignedDiagnosticQuestions = questions;
+    }
+  }
+
+  async getStudentAssignedQuestions(studentId: string, classNumber: number = 2): Promise<Question[]> {
+      let student: Student | null = null;
+      if (this.mongoDb) {
+        student = await this.mongoDb.collection<Student>('students').findOne({ id: studentId });
+      }
+      if (!student && this.data && this.data.students) {
+        student = this.data.students.find(s => s.id === studentId) || null;
+      }
+      // Only reuse a cached paper that still carries the curriculum identity
+      // (conceptId on every question). A paper cached before questions were
+      // tagged, or written by a code path that produced conceptId-less
+      // questions (e.g. bulk diagnostic masterJson items), cannot be matched
+      // back to the 93-level framework, so the prerequisite resolver would
+      // silently emit nothing. Treating such a paper as absent makes
+      // generateClassPaperFromAtlas regenerate it on demand.
+      const cached = student?.assignedDiagnosticQuestions;
+      if (cached && cached.length > 0 && cached.every(q => q.conceptId)) {
+        return dedupeQuestionsById(cached);
+      }
+      // Fall back to a class-correct generator (legacy = always L22-L31, wrong for all classes).
+      return await this.generateClassPaperFromAtlas(studentId, classNumber);
+    }
+
   async getAnswerSubmissions() {
-    return await this.mongoDb!.collection<AnswerSubmission>('answerSubmissions').find({}).toArray();
+    if (this.mongoDb) return await this.mongoDb.collection<AnswerSubmission>('answerSubmissions').find({}).toArray();
+    return this.data?.answerSubmissions || [];
   }
-  async getEvaluationReports() {
-    return await this.mongoDb!.collection<EvaluationReport>('evaluationReports').find({}).toArray();
+  async getEvaluationReports(opts?: { studentIds?: string[] }) {
+    if (this.mongoDb) {
+      const filter: any = {};
+      if (opts?.studentIds) filter.studentId = { $in: opts.studentIds };
+      return await this.mongoDb.collection<EvaluationReport>('evaluationReports').find(filter).toArray();
+    }
+    let result = this.data?.evaluationReports || [];
+    if (opts?.studentIds) result = result.filter(r => opts.studentIds!.includes(r.studentId));
+    return result;
   }
+
+  async getStudentsByIds(ids: string[]): Promise<Student[]> {
+    if (this.mongoDb) {
+      return await this.mongoDb.collection<Student>('students').find({ id: { $in: ids } }).toArray();
+    }
+    return (this.data?.students || []).filter(s => ids.includes(s.id));
+  }
+
+  async getAnalyticsForScope(schoolFilter?: any) {
+    if (this.mongoDb) {
+      let schoolIds: string[] | null = null;
+      if (schoolFilter && Object.keys(schoolFilter).length > 0) {
+        const schools = await this.mongoDb.collection('schools')
+          .find(schoolFilter, { projection: { id: 1 } })
+          .toArray();
+        schoolIds = schools.map(s => s.id);
+      }
+
+      const studentFilter: any = {};
+      if (schoolIds) {
+        studentFilter.schoolId = { $in: schoolIds };
+      }
+
+      const statsPromise = this.mongoDb.collection('students').aggregate([
+        { $match: studentFilter },
+        {
+          $group: {
+            _id: null,
+            count: { $sum: 1 },
+            sumLevel: { $sum: '$currentLevel' },
+            certified: {
+              $sum: {
+                $cond: [{ $gte: ['$currentLevel', 5] }, 1, 0]
+              }
+            }
+          }
+        }
+      ]).toArray();
+
+      const distPromise = this.mongoDb.collection('students').aggregate([
+        { $match: studentFilter },
+        {
+          $group: {
+            _id: '$currentLevel',
+            count: { $sum: 1 }
+          }
+        }
+      ]).toArray();
+
+      const [statsResult, distResult] = await Promise.all([statsPromise, distPromise]);
+
+      const stats = statsResult[0] || { count: 0, sumLevel: 0, certified: 0 };
+      const count = stats.count;
+      const sumLevel = stats.sumLevel;
+      const certified = stats.certified;
+
+      const avgLevel = count > 0 ? Math.round((sumLevel / count) * 10) / 10 : 0;
+      const certificationRate = count > 0 ? Math.round((certified / count) * 100) : 0;
+
+      const topicMastery = {
+        "Number Sense": Math.min(100, Math.round(55 + avgLevel * 8)),
+        "Number Operations": Math.min(100, Math.round(45 + avgLevel * 9)),
+        "Shapes": Math.min(100, Math.round(58 + avgLevel * 7)),
+        "Fractions": Math.min(100, Math.round(20 + avgLevel * 11)),
+        "Patterns": Math.min(100, Math.round(38 + avgLevel * 10)),
+        "Measurement": Math.min(100, Math.round(32 + avgLevel * 10))
+      };
+
+      const levelDistribution: Record<string, number> = {};
+      for (let i = 1; i <= 15; i++) {
+        levelDistribution[`Level ${i}`] = 0;
+      }
+      levelDistribution["Level 16+"] = 0;
+
+      distResult.forEach(r => {
+        const lvl = r._id;
+        if (lvl >= 16) {
+          levelDistribution["Level 16+"] += r.count;
+        } else if (lvl >= 1 && lvl <= 15) {
+          levelDistribution[`Level ${lvl}`] = r.count;
+        }
+      });
+
+      return {
+        avgLevel,
+        certificationRate,
+        topicMastery,
+        levelDistribution,
+        count
+      };
+    }
+
+    const schools = this.data?.schools || [];
+    let schoolIds: string[] | null = null;
+    if (schoolFilter && Object.keys(schoolFilter).length > 0) {
+      schoolIds = schools.filter(s => {
+        return Object.entries(schoolFilter).every(([k, v]) => (s as any)[k] === v);
+      }).map(s => s.id);
+    }
+
+    let filteredStudents = this.data?.students || [];
+    if (schoolIds) {
+      filteredStudents = filteredStudents.filter(s => schoolIds!.includes(s.schoolId));
+    }
+
+    const count = filteredStudents.length;
+    if (count === 0) {
+      return {
+        avgLevel: 0,
+        certificationRate: 0,
+        topicMastery: { "Number Sense": 0, "Number Operations": 0, "Shapes": 0, "Fractions": 0, "Patterns": 0, "Measurement": 0 },
+        levelDistribution: Object.fromEntries(Array.from({ length: 15 }, (_, i) => [`Level ${i + 1}`, 0]).concat([["Level 16+", 0]])),
+        count: 0
+      };
+    }
+
+    const sumLevel = filteredStudents.reduce((acc, s) => acc + s.currentLevel, 0);
+    const avgLevel = Math.round((sumLevel / count) * 10) / 10;
+    const certified = filteredStudents.filter(s => s.currentLevel >= 5).length;
+    const certificationRate = Math.round((certified / count) * 100);
+
+    const topicMastery = {
+      "Number Sense": Math.min(100, Math.round(55 + avgLevel * 8)),
+      "Number Operations": Math.min(100, Math.round(45 + avgLevel * 9)),
+      "Shapes": Math.min(100, Math.round(58 + avgLevel * 7)),
+      "Fractions": Math.min(100, Math.round(20 + avgLevel * 11)),
+      "Patterns": Math.min(100, Math.round(38 + avgLevel * 10)),
+      "Measurement": Math.min(100, Math.round(32 + avgLevel * 10))
+    };
+
+    const levelDistribution: Record<string, number> = {};
+    for (let i = 1; i <= 15; i++) {
+      levelDistribution[`Level ${i}`] = filteredStudents.filter(s => s.currentLevel === i).length;
+    }
+    levelDistribution["Level 16+"] = filteredStudents.filter(s => s.currentLevel >= 16).length;
+
+    return {
+      avgLevel,
+      certificationRate,
+      topicMastery,
+      levelDistribution,
+      count
+    };
+  }
+
   async getTickets() {
-    return await this.mongoDb!.collection<Ticket>('tickets').find({}).toArray();
+    if (this.mongoDb) return await this.mongoDb.collection<Ticket>('tickets').find({}).toArray();
+    return this.data?.tickets || [];
   }
   async getLogbook() {
-    return await this.mongoDb!.collection<LogEntry>('logbook').find({}).toArray();
+    if (this.mongoDb) return await this.mongoDb.collection<LogEntry>('logbook').find({}).toArray();
+    return this.data?.logbook || [];
   }
   async getAnnouncements() {
-    return await this.mongoDb!.collection<Announcement>('announcements').find({}).toArray();
+    if (this.mongoDb) return await this.mongoDb.collection<Announcement>('announcements').find({}).toArray();
+    return this.data?.announcements || [];
+  }
+
+  /** Archetypes for one class, or every class when no class is named. */
+  async getMisconceptionClusters(classGroup?: string) {
+    const filter = classGroup ? { classGroup } : {};
+    if (this.mongoDb) {
+      return await this.mongoDb
+        .collection<MisconceptionCluster>('misconception_clusters')
+        .find(filter)
+        .toArray();
+    }
+    const all = this.data?.misconceptionClusters || [];
+    return classGroup ? all.filter(c => c.classGroup === classGroup) : all;
+  }
+
+  async createMisconceptionCluster(cluster: MisconceptionCluster) {
+    if (this.mongoDb) await this.mongoDb.collection('misconception_clusters').insertOne(cluster);
+    if (this.data) {
+      if (!this.data.misconceptionClusters) this.data.misconceptionClusters = [];
+      this.data.misconceptionClusters.push(cluster);
+    }
+    return cluster;
+  }
+
+  async updateMisconceptionCluster(cluster: MisconceptionCluster) {
+    if (this.mongoDb) await this.mongoDb.collection('misconception_clusters').replaceOne({ id: cluster.id }, cluster, { upsert: true });
+    if (this.data) {
+      if (!this.data.misconceptionClusters) this.data.misconceptionClusters = [];
+      const idx = this.data.misconceptionClusters.findIndex(x => x.id === cluster.id);
+      if (idx !== -1) this.data.misconceptionClusters[idx] = cluster;
+      else this.data.misconceptionClusters.push(cluster);
+    }
+    return cluster;
   }
 
   // --- Write / Update Helpers ---
 
   async addUser(user: User) {
-    await this.mongoDb!.collection('users').insertOne(user);
-    if (this.data) this.data.users.push(user);
+    if (this.mongoDb) await this.mongoDb.collection('users').insertOne(user);
+    if (this.data) {
+      this.data.users.push(user);
+      if (!this.mongoDb) await this.save();
+    }
     return user;
   }
 
+  async updateUserPasswordHash(userId: string, passwordHash: string) {
+    if (!this.mongoDb) {
+      const u = this.data?.users.find(x => x.id === userId);
+      if (u) {
+        u.passwordHash = passwordHash;
+        await this.save();
+      }
+      return;
+    }
+    await this.mongoDb!.collection('users').updateOne({ id: userId }, { $set: { passwordHash } });
+  }
+
+  async getExistingAadhars(aadhars: string[]): Promise<Set<string>> {
+    if (this.mongoDb) {
+      const docs = await this.mongoDb.collection('students')
+        .find({ aadharMasked: { $in: aadhars } }, { projection: { aadharMasked: 1 } })
+        .toArray();
+      return new Set(docs.map(d => d.aadharMasked));
+    }
+    const set = new Set<string>();
+    (this.data?.students || []).forEach(s => {
+      if (aadhars.includes(s.aadharMasked)) set.add(s.aadharMasked);
+    });
+    return set;
+  }
+
+  /**
+   * School-scoped variant of `getExistingAadhars`. Used by the student
+   * registration dup-check so a volunteer's submission is rejected only
+   * when the same Aadhaar already exists at the *same* school — not when
+   * it happens to share a 4-digit suffix with a student in some other
+   * school (which is the common case against the 86,400-student seed,
+   * since 1,440 schools × 60 students covers the 10,000 4-digit suffixes
+   * ~8.6×). The cross-school "is this the same person?" question is
+   * delegated to the vault `getExistingAadhaarIdentityIds` check, which
+   * is deterministic on the input digits and only fires for students
+   * that were actually tokenized through the vault (seed students carry
+   * `aadhaarIdentityId: null`, so the check is a no-op for them).
+   */
+  async getExistingAadharsInSchool(schoolId: string, aadhars: string[]): Promise<Set<string>> {
+    if (this.mongoDb) {
+      const docs = await this.mongoDb.collection('students')
+        .find({ schoolId, aadharMasked: { $in: aadhars } }, { projection: { aadharMasked: 1 } })
+        .toArray();
+      return new Set(docs.map(d => d.aadharMasked));
+    }
+    const set = new Set<string>();
+    (this.data?.students || []).forEach(s => {
+      if (s.schoolId === schoolId && aadhars.includes(s.aadharMasked)) set.add(s.aadharMasked);
+    });
+    return set;
+  }
+
+  async getExistingAadhaarIdentityIds(identityIds: string[]): Promise<Set<string>> {
+    const cleanIds = identityIds.filter(Boolean);
+    if (cleanIds.length === 0) return new Set<string>();
+    if (this.mongoDb) {
+      const docs = await this.mongoDb.collection('students')
+        .find({ aadhaarIdentityId: { $in: cleanIds } }, { projection: { aadhaarIdentityId: 1 } })
+        .toArray();
+      return new Set(docs.map(d => d.aadhaarIdentityId).filter(Boolean));
+    }
+    const set = new Set<string>();
+    (this.data?.students || []).forEach(s => {
+      if (s.aadhaarIdentityId && cleanIds.includes(s.aadhaarIdentityId)) set.add(s.aadhaarIdentityId);
+    });
+    return set;
+  }
+
   async addStudent(student: Student) {
-    await this.mongoDb!.collection('students').insertOne(student);
-    if (this.data) this.data.students.push(student);
+    if (this.mongoDb) {
+      await this.mongoDb.collection('students').insertOne(student);
+    }
+    if (this.data) {
+      this.data.students.push(student);
+      if (!this.mongoDb) await this.save();
+    }
     return student;
   }
 
+  // Only the original seed data ever populated the `classes` collection —
+  // registering a student (single or bulk-import) creates a Student record
+  // tagged with a classGroup/section, but nothing was ever creating the
+  // matching ClassGroup document those classGroup/section strings imply.
+  // Several features key off ClassGroup existing for a teacher/school (the
+  // Teacher Dashboard's class-tab bar, and — the bug this was found from —
+  // bulk diagnostic generation's authorization check), so a teacher whose
+  // whole roster was registered live (not seeded) could end up "not
+  // authorized" for a class she demonstrably has real students in.
+  // Called after every successful student creation; idempotent — does
+  // nothing if a ClassGroup already exists for this school+class+section.
+  async ensureClassExists(schoolId: string, className: string, section: string, teacherId: string) {
+    const existing = await this.getClasses();
+    if (existing.some(c => c.schoolId === schoolId && c.className === className && c.section === section)) {
+      return;
+    }
+    const newClass: ClassGroup = {
+      id: 'c_' + schoolId + '_' + className.replace(/\s+/g, '') + '_' + section,
+      schoolId,
+      className,
+      section,
+      teacherId,
+    };
+    if (this.mongoDb) {
+      // Race-safe: two near-simultaneous registrations into a brand-new
+      // class both pass the `existing.some(...)` check above before either
+      // has inserted. upsert on the same deterministic `id` means the
+      // second one updates rather than duplicate-inserts.
+      await this.mongoDb.collection('classes').updateOne(
+        { id: newClass.id },
+        { $setOnInsert: newClass },
+        { upsert: true }
+      );
+    }
+    if (this.data) {
+      if (!this.data.classes.some(c => c.id === newClass.id)) {
+        this.data.classes.push(newClass);
+      }
+      if (!this.mongoDb) await this.save();
+    }
+  }
+
+  async ensureClassesExist(schoolId: string, classNames: string[], section: string, teacherId: string) {
+    const classes: ClassGroup[] = classNames.map(className => ({
+      id: 'c_' + schoolId + '_' + className.replace(/\s+/g, '') + '_' + section,
+      schoolId,
+      className,
+      section,
+      teacherId,
+    }));
+    if (this.mongoDb && classes.length > 0) {
+      await this.mongoDb.collection<ClassGroup>('classes').bulkWrite(classes.map(cls => ({
+        updateOne: {
+          filter: { id: cls.id },
+          update: { $setOnInsert: cls },
+          upsert: true,
+        },
+      })));
+    }
+    if (this.data) {
+      for (const cls of classes) {
+        if (!this.data.classes.some(existing => existing.id === cls.id)) this.data.classes.push(cls);
+      }
+      if (!this.mongoDb && classes.length > 0) await this.save();
+    }
+  }
+
   async updateStudent(studentId: string, updates: Partial<Student>) {
-    await this.mongoDb!.collection('students').updateOne({ id: studentId }, { $set: updates });
-    const s = await this.mongoDb!.collection<Student>('students').findOne({ id: studentId });
+    // Defense-in-depth (Phase 2 hardening): routes whitelist their fields
+    // today, but this mutator accepts any Partial<Student>. Aadhaar identity
+    // fields are owned exclusively by the tokenized creation path; refuse
+    // them here so no future caller can overwrite vault references or
+    // reintroduce plaintext through $set. addStudent() is intentionally NOT
+    // restricted — it needs these fields at creation time.
+    const blocked = Object.keys(updates).filter(k => AADHAAR_PROTECTED_UPDATE_FIELDS.includes(k));
+    if (blocked.length > 0) {
+      throw new Error(
+        `updateStudent: refusing to write Aadhaar-sensitive field(s): ${blocked.join(', ')}. `
+        + 'These are owned by the Aadhaar Vault tokenization path (createStudentFromData).',
+      );
+    }
+    // Phase 2 hardening fix: support the local file-fallback store the same
+    // way addStudent() does. The previous unconditional `this.mongoDb!`
+    // crashed every level/profile PATCH when MongoDB was absent.
+    if (!this.mongoDb) {
+      const list = this.data?.students;
+      if (!list) return undefined;
+      const idx = list.findIndex(x => x.id === studentId);
+      if (idx === -1) return undefined;
+      list[idx] = { ...list[idx], ...updates };
+      await this.save();
+      return list[idx];
+    }
+    await this.mongoDb.collection('students').updateOne({ id: studentId }, { $set: updates });
+    const s = await this.mongoDb.collection<Student>('students').findOne({ id: studentId });
     if (s && this.data) {
       const idx = this.data.students.findIndex(x => x.id === studentId);
       if (idx !== -1) this.data.students[idx] = s;
@@ -432,12 +2616,68 @@ export class DBStore {
   }
 
   async addWorksheet(ws: Worksheet) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.worksheets.push(ws);
+        await this.save();
+      }
+      return ws;
+    }
     await this.mongoDb!.collection('worksheets').insertOne(ws);
     if (this.data) this.data.worksheets.push(ws);
     return ws;
   }
 
+  async addStudentCycleLock(lock: StudentCycleLock) {
+    if (this.mongoDb) await this.mongoDb.collection('studentCycleLocks').insertOne(lock as any);
+    if (this.data) this.data.studentCycleLocks.push(lock);
+    return lock;
+  }
+  async addGenerationWindow(window: WorksheetGenerationWindow) {
+    if (this.mongoDb) await this.mongoDb.collection('generationWindows').insertOne(window);
+    if (this.data) this.data.generationWindows.push(window);
+    return window;
+  }
+  async updateGenerationWindow(
+    id: string,
+    updates: Partial<WorksheetGenerationWindow>
+  ) {
+    if (this.mongoDb) {
+      await this.mongoDb.collection<WorksheetGenerationWindow>('generationWindows').updateOne(
+        { id },
+        { $set: updates }
+      );
+    }
+
+    if (this.data) {
+      const index = this.data.generationWindows.findIndex(window => window.id === id);
+
+      if (index !== -1) {
+        this.data.generationWindows[index] = {
+          ...this.data.generationWindows[index],
+          ...updates
+        };
+      }
+    }
+  }
+  async addTestHistoryEntry(entry: TestHistoryEntry) {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('testHistory').insertOne(entry);
+    }
+    if (this.data) this.data.testHistory.push(entry);
+    return entry;
+  }
+
   async updateWorksheet(worksheetId: string, updates: Partial<Worksheet>) {
+    if (!this.mongoDb) {
+      const list = this.data?.worksheets;
+      if (!list) return undefined;
+      const idx = list.findIndex(x => x.id === worksheetId);
+      if (idx === -1) return undefined;
+      list[idx] = { ...list[idx], ...updates };
+      await this.save();
+      return list[idx];
+    }
     await this.mongoDb!.collection('worksheets').updateOne({ id: worksheetId }, { $set: updates });
     const ws = await this.mongoDb!.collection<Worksheet>('worksheets').findOne({ id: worksheetId });
     if (ws && this.data) {
@@ -448,30 +2688,171 @@ export class DBStore {
   }
 
   async addLevelWorksheet(ws: LevelWorksheet) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.levelWorksheets.push(ws);
+        await this.save();
+      }
+      return ws;
+    }
     await this.mongoDb!.collection('levelWorksheets').insertOne(ws);
     if (this.data) this.data.levelWorksheets.push(ws);
     return ws;
   }
 
   async addAnswerSubmission(sub: AnswerSubmission) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.answerSubmissions.push(sub);
+        await this.save();
+      }
+      return sub;
+    }
     await this.mongoDb!.collection('answerSubmissions').insertOne(sub);
     if (this.data) this.data.answerSubmissions.push(sub);
     return sub;
   }
 
   async addEvaluationReport(rep: EvaluationReport) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.evaluationReports.push(rep);
+        await this.save();
+      }
+      return rep;
+    }
     await this.mongoDb!.collection('evaluationReports').insertOne(rep);
     if (this.data) this.data.evaluationReports.push(rep);
     return rep;
   }
 
+  // --- Certification (SRS R-7) ---
+
+  async getCertifications(): Promise<Certification[]> {
+    if (this.mongoDb) return await this.mongoDb.collection<Certification>('certifications').find({}).toArray();
+    return this.data?.certifications || [];
+  }
+
+  async getCertificationById(certId: string): Promise<Certification | null> {
+    if (this.mongoDb) return await this.mongoDb.collection<Certification>('certifications').findOne({ id: certId });
+    return this.data?.certifications.find(c => c.id === certId) || null;
+  }
+
+  async getCertificationByStudentClassLevel(studentId: string, classNumber: number, level: number): Promise<Certification | null> {
+    const list = this.mongoDb
+      ? await this.mongoDb.collection<Certification>('certifications').find({ studentId, classNumber, level }).toArray()
+      : (this.data?.certifications || []).filter(c => c.studentId === studentId && c.classNumber === classNumber && c.level === level);
+    // Prefer active > review_needed > revoked (most-recent verdict wins for orchestrator)
+    const priority: Record<CertificationStatus, number> = { active: 0, review_needed: 1, revoked: 2 };
+    return list.sort((a, b) => priority[a.status] - priority[b.status])[0] || null;
+  }
+
+  async addCertification(cert: Certification) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.certifications.push(cert);
+        await this.save();
+      }
+      return cert;
+    }
+    await this.mongoDb!.collection('certifications').insertOne(cert);
+    if (this.data) this.data.certifications.push(cert);
+    return cert;
+  }
+
+  async updateCertification(certId: string, updates: Partial<Certification>) {
+    if (!this.mongoDb) {
+      const list = this.data?.certifications;
+      if (!list) return undefined;
+      const idx = list.findIndex(x => x.id === certId);
+      if (idx === -1) return undefined;
+      list[idx] = { ...list[idx], ...updates };
+      await this.save();
+      return list[idx];
+    }
+    await this.mongoDb!.collection('certifications').updateOne({ id: certId }, { $set: updates });
+    if (this.mongoDb) {
+      return await this.mongoDb.collection<Certification>('certifications').findOne({ id: certId });
+    }
+  }
+
+  /** Optimistic concurrency: only update if version still matches. Returns null if no match. */
+  async updateCertificationIfVersion(certId: string, expectedVersion: number, updates: Partial<Certification>) {
+    if (this.mongoDb) {
+      const result = await this.mongoDb.collection<Certification>('certifications').findOneAndUpdate(
+        { id: certId, version: expectedVersion },
+        { $set: updates },
+        { returnDocument: 'after' }
+      );
+      return result || null;
+    }
+    if (this.data) {
+      const idx = this.data.certifications.findIndex(c => c.id === certId && c.version === expectedVersion);
+      if (idx === -1) return null;
+      this.data.certifications[idx] = { ...this.data.certifications[idx], ...updates };
+      await this.save();
+      return this.data.certifications[idx];
+    }
+    return null;
+  }
+
+  async getCompetencyRequirements(): Promise<CompetencyRequirement[]> {
+    if (this.mongoDb) return await this.mongoDb.collection<CompetencyRequirement>('competencyRequirements').find({}).toArray();
+    return this.data?.competencyRequirements || [];
+  }
+
+  /** Most recent conceptMastery for a student, from their latest EvaluationReport. */
+  async getLatestConceptMastery(studentId: string): Promise<Record<string, MasteryLevel> | null> {
+    const reports = this.mongoDb
+      ? await this.mongoDb.collection<EvaluationReport>('evaluationReports').find({ studentId }).sort({ timestamp: -1 }).limit(1).toArray()
+      : (this.data?.evaluationReports || []).filter(r => r.studentId === studentId).sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 1);
+    if (reports.length === 0) return null;
+    return reports[0].conceptMastery;
+  }
+
+  async getEvaluationReportById(id: string) {
+    if (this.mongoDb) return await this.mongoDb.collection<EvaluationReport>('evaluationReports').findOne({ id });
+    return (this.data?.evaluationReports || []).find(r => r.id === id);
+  }
+
+  async updateEvaluationReport(id: string, updates: Partial<EvaluationReport>) {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('evaluationReports').updateOne({ id }, { $set: updates });
+      return await this.mongoDb.collection<EvaluationReport>('evaluationReports').findOne({ id });
+    }
+    if (this.data) {
+      const idx = this.data.evaluationReports.findIndex(r => r.id === id);
+      if (idx !== -1) {
+        this.data.evaluationReports[idx] = { ...this.data.evaluationReports[idx], ...updates };
+        return this.data.evaluationReports[idx];
+      }
+    }
+    return undefined;
+  }
+
   async addTicket(t: Ticket) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.tickets.push(t);
+        await this.save();
+      }
+      return t;
+    }
     await this.mongoDb!.collection('tickets').insertOne(t);
     if (this.data) this.data.tickets.push(t);
     return t;
   }
 
   async updateTicket(id: string, updates: Partial<Ticket>) {
+    if (!this.mongoDb) {
+      const list = this.data?.tickets;
+      if (!list) return undefined;
+      const idx = list.findIndex(x => x.id === id);
+      if (idx === -1) return undefined;
+      list[idx] = { ...list[idx], ...updates };
+      await this.save();
+      return list[idx];
+    }
     await this.mongoDb!.collection('tickets').updateOne({ id }, { $set: updates });
     const t = await this.mongoDb!.collection<Ticket>('tickets').findOne({ id });
     if (t && this.data) {
@@ -482,6 +2863,15 @@ export class DBStore {
   }
 
   async updateUser(userId: string, updates: Partial<User>) {
+    if (!this.mongoDb) {
+      const list = this.data?.users;
+      if (!list) return undefined;
+      const idx = list.findIndex(x => x.id === userId);
+      if (idx === -1) return undefined;
+      list[idx] = { ...list[idx], ...updates };
+      await this.save();
+      return list[idx];
+    }
     await this.mongoDb!.collection('users').updateOne({ id: userId }, { $set: updates });
     const u = await this.mongoDb!.collection<User>('users').findOne({ id: userId });
     if (u && this.data) {
@@ -492,6 +2882,15 @@ export class DBStore {
   }
 
   async updateSchool(schoolId: string, updates: Partial<School>) {
+    if (!this.mongoDb) {
+      const list = this.data?.schools;
+      if (!list) return undefined;
+      const idx = list.findIndex(x => x.id === schoolId);
+      if (idx === -1) return undefined;
+      list[idx] = { ...list[idx], ...updates };
+      await this.save();
+      return list[idx];
+    }
     await this.mongoDb!.collection('schools').updateOne({ id: schoolId }, { $set: updates });
     const s = await this.mongoDb!.collection<School>('schools').findOne({ id: schoolId });
     if (s && this.data) {
@@ -502,18 +2901,164 @@ export class DBStore {
   }
 
   async addSchool(school: School) {
-    await this.mongoDb!.collection('schools').insertOne(school);
-    if (this.data) this.data.schools.push(school);
+    if (this.mongoDb) await this.mongoDb.collection('schools').insertOne(school);
+    if (this.data) {
+      this.data.schools.push(school);
+      if (!this.mongoDb) await this.save();
+    }
     return school;
   }
 
+  async deleteSchool(id: string): Promise<boolean> {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('schools').deleteOne({ id });
+    }
+    if (this.data) {
+      const idx = this.data.schools.findIndex(s => s.id === id);
+      if (idx !== -1) {
+        this.data.schools.splice(idx, 1);
+        if (!this.mongoDb) await this.save();
+      }
+    }
+    return true;
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('users').deleteOne({ id });
+    }
+    if (this.data) {
+      const idx = this.data.users.findIndex(u => u.id === id);
+      if (idx !== -1) {
+        this.data.users.splice(idx, 1);
+        if (!this.mongoDb) await this.save();
+      }
+    }
+    return true;
+  }
+
+  async deleteClassesForSchool(schoolId: string): Promise<number> {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('classes').deleteMany({ schoolId });
+    }
+    if (this.data) {
+      const initialLen = this.data.classes.length;
+      this.data.classes = this.data.classes.filter(c => c.schoolId !== schoolId);
+      if (!this.mongoDb && this.data.classes.length !== initialLen) await this.save();
+    }
+    return 0;
+  }
+
   async addLog(log: LogEntry) {
-    await this.mongoDb!.collection('logbook').insertOne(log);
-    if (this.data) this.data.logbook.unshift(log);
+    // Phase 2 hardening fix: guard the Mongo write like addStudent() does.
+    // Previously `this.mongoDb!` crashed here whenever MongoDB was absent
+    // (local file fallback), which threw INSIDE the student-registration
+    // handlers right after addStudent() had already persisted — the student
+    // was saved but the HTTP response was lost (express 4 cannot catch
+    // async handler throws), hanging every file-mode registration.
+    if (this.mongoDb) {
+      await this.mongoDb.collection('logbook').insertOne(log);
+    }
+    if (this.data) {
+      this.data.logbook.unshift(log);
+      if (!this.mongoDb) await this.save();
+    }
     return log;
   }
 
+  /**
+   * Transactional sibling of {@link addLog}. Writes the entry to
+   * the `logbook` collection **inside the supplied MongoDB
+   * session**, so the audit row commits or rolls back atomically
+   * with the caller's other writes (e.g. the `vault_identities`
+   * and `vault_tokens` inserts in the tokenize command).
+   *
+   * **Why this exists.** Issue #406's review asked that the
+   * vault's audit sink be the existing `logbook` collection, not
+   * a separate `vault_audit_log` table. The naive refactor
+   * ("call `addLog()` after the transaction commits") breaks the
+   * identity+token+audit atomicity invariant — a tokenize that
+   * fails after the identity insert would still leave an audit
+   * row, and vice versa. This method carries the session so the
+   * Mongo driver ties the logbook insert to the same
+   * `withTransaction` block as the rest of the unit-of-work.
+   *
+   * **File-fallback path.** The `data.logbook` array is also
+   * updated best-effort. There is no real transaction in the
+   * file mode, so the audit row is NOT atomic with the rest of
+   * the vault write — a crash between the two would leave a
+   * token row without a paired audit row. This matches the
+   * wider pre-existing posture (the file mode has no
+   * cross-collection atomicity at all). Operators running the
+   * vault in production are expected to use a real Mongo
+   * replica set; the JSON file is a dev convenience, not a
+   * secure store.
+   */
+  async addLogInSession(session: ClientSession, log: LogEntry): Promise<LogEntry> {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('logbook').insertOne(log, { session });
+    }
+    if (this.data) {
+      this.data.logbook.unshift(log);
+      if (!this.mongoDb) await this.save();
+    }
+    return log;
+  }
+
+  /**
+   * Read-side counterpart of {@link addLog}. Returns logbook rows
+   * whose `details` field starts with the given prefix, sorted
+   * newest-first, capped at `opts.limit` (default 100, max 1000).
+   *
+   * Used by the vault's read-audit-history command to filter
+   * the `logbook` collection down to vault audit rows (the
+   * `details` prefix is `vault:`, set by the mapping helper at
+   * `backend/src/modules/vault/audit/logbook-entry.ts`).
+   *
+   * The query is a prefix match, not an exact match: the
+   * `details` string is `vault:<action> identity=<id> ...`, so
+   * the same `vault:` prefix covers every vault row regardless
+   * of action. Callers that need to filter further (e.g. by
+   * identityId) do so in application code, parsing the `details`
+   * field — see `parseVaultLogbookEntry` in the audit-log
+   * helper.
+   *
+   * Regex special characters in the prefix are escaped so a
+   * caller passing arbitrary text cannot inject a regex
+   * pattern. The file-fallback path does a plain
+   * `String.prototype.startsWith` check.
+   */
+  async listLogsByDetailsPrefix(
+    prefix: string,
+    opts: { limit?: number } = {},
+  ): Promise<LogEntry[]> {
+    const limit = Math.max(1, Math.min(opts.limit ?? 100, 1000));
+    if (this.mongoDb) {
+      const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return await this.mongoDb
+        .collection<LogEntry>('logbook')
+        .find({ details: { $regex: '^' + escaped } })
+        .sort({ timestamp: -1 })
+        .limit(limit)
+        .toArray();
+    }
+    const rows = (this.data?.logbook ?? []).filter((l) =>
+      typeof l.details === 'string' && l.details.startsWith(prefix),
+    );
+    rows.sort((a, b) =>
+      a.timestamp < b.timestamp ? 1 : a.timestamp > b.timestamp ? -1 : 0,
+    );
+    return rows.slice(0, limit);
+  }
+
   async addAnnouncement(ann: Announcement) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.announcements.unshift(ann);
+        await this.save();
+      }
+      return ann;
+    }
     await this.mongoDb!.collection('announcements').insertOne(ann);
     if (this.data) this.data.announcements.unshift(ann);
     return ann;
@@ -522,16 +3067,33 @@ export class DBStore {
   // --- Intervention & Best Practice Methods ---
 
   async getInterventions() {
+    if (!this.mongoDb) return this.data?.interventions || [];
     return await this.mongoDb!.collection<Intervention>('interventions').find({}).toArray();
   }
 
   async addIntervention(intervention: Intervention) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.interventions.push(intervention);
+        await this.save();
+      }
+      return intervention;
+    }
     await this.mongoDb!.collection('interventions').insertOne(intervention);
     if (this.data) this.data.interventions.push(intervention);
     return intervention;
   }
 
   async updateIntervention(id: string, updates: Partial<Intervention>) {
+    if (!this.mongoDb) {
+      const list = this.data?.interventions;
+      if (!list) return undefined;
+      const idx = list.findIndex(x => x.id === id);
+      if (idx === -1) return undefined;
+      list[idx] = { ...list[idx], ...updates };
+      await this.save();
+      return list[idx];
+    }
     await this.mongoDb!.collection('interventions').updateOne({ id }, { $set: updates });
     const i = await this.mongoDb!.collection<Intervention>('interventions').findOne({ id });
     if (i && this.data) {
@@ -542,16 +3104,33 @@ export class DBStore {
   }
 
   async getBestPractices() {
+    if (!this.mongoDb) return this.data?.bestPractices || [];
     return await this.mongoDb!.collection<BestPractice>('bestPractices').find({}).toArray();
   }
 
   async addBestPractice(bp: BestPractice) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.bestPractices.push(bp);
+        await this.save();
+      }
+      return bp;
+    }
     await this.mongoDb!.collection('bestPractices').insertOne(bp);
     if (this.data) this.data.bestPractices.push(bp);
     return bp;
   }
 
   async updateBestPractice(id: string, updates: Partial<BestPractice>) {
+    if (!this.mongoDb) {
+      const list = this.data?.bestPractices;
+      if (!list) return undefined;
+      const idx = list.findIndex(x => x.id === id);
+      if (idx === -1) return undefined;
+      list[idx] = { ...list[idx], ...updates };
+      await this.save();
+      return list[idx];
+    }
     await this.mongoDb!.collection('bestPractices').updateOne({ id }, { $set: updates });
     const bp = await this.mongoDb!.collection<BestPractice>('bestPractices').findOne({ id });
     if (bp && this.data) {
@@ -560,6 +3139,552 @@ export class DBStore {
     }
     return bp || undefined;
   }
+
+  // --- Question Logic Methods ---
+
+  /** Live logics only unless `includeDeleted`, since soft-deleted rows exist purely for audit. */
+  async getQuestionLogics(includeDeleted = false) {
+    if (!this.mongoDb) {
+      // Mirrors the Mongo query below: `{ deletedAt: null }` matches a null
+      // OR missing field (hence `==`), sorted by createdAt descending.
+      return (this.data?.questionLogics || [])
+        .filter(l => includeDeleted || l.deletedAt == null)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    }
+    const filter = includeDeleted ? {} : { deletedAt: null };
+    return await this.mongoDb!.collection<QuestionLogic>('questionLogics')
+      .find(filter).sort({ createdAt: -1 }).toArray();
+  }
+
+  async getQuestionLogicById(id: string) {
+    if (!this.mongoDb) return this.data?.questionLogics.find(x => x.id === id) || undefined;
+    return (await this.mongoDb!.collection<QuestionLogic>('questionLogics').findOne({ id })) || undefined;
+  }
+
+  async addQuestionLogic(logic: QuestionLogic) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.questionLogics.push(logic);
+        await this.save();
+      }
+      return logic;
+    }
+    await this.mongoDb!.collection('questionLogics').insertOne(logic);
+    if (this.data) this.data.questionLogics.push(logic);
+    return logic;
+  }
+
+  async updateQuestionLogic(id: string, updates: Partial<QuestionLogic>) {
+    if (!this.mongoDb) {
+      const list = this.data?.questionLogics;
+      if (!list) return undefined;
+      const idx = list.findIndex(x => x.id === id);
+      if (idx === -1) return undefined;
+      list[idx] = { ...list[idx], ...updates };
+      await this.save();
+      return list[idx];
+    }
+    await this.mongoDb!.collection('questionLogics').updateOne({ id }, { $set: updates });
+    const l = await this.mongoDb!.collection<QuestionLogic>('questionLogics').findOne({ id });
+    if (l && this.data) {
+      const idx = this.data.questionLogics.findIndex(x => x.id === id);
+      if (idx !== -1) this.data.questionLogics[idx] = l;
+    }
+    return l || undefined;
+  }
+
+  /**
+   * Counts for the header cards. `levelsWithLogic` is a distinct count over live
+   * rows — authoring five logics for one level still covers exactly one level.
+   */
+  async getQuestionLogicStats(totalLevels: number) {
+    if (!this.mongoDb) {
+      const live = (this.data?.questionLogics || []).filter(l => l.deletedAt == null);
+      return {
+        totalLogics: live.length,
+        totalLevels,
+        levelsWithLogic: new Set(live.map(l => l.level)).size,
+      };
+    }
+    const live = await this.mongoDb!.collection<QuestionLogic>('questionLogics')
+      .find({ deletedAt: null }).toArray();
+    return {
+      totalLogics: live.length,
+      totalLevels,
+      levelsWithLogic: new Set(live.map(l => l.level)).size,
+    };
+  }
+
+  // --- Question Template Methods ----------------------------------------
+  //
+  // Templates are addressed by `conceptId`. Nothing here takes a level number:
+  // levels are insertable and re-orderable, so a stored level number would be
+  // a reference that quietly stops meaning what it meant when it was written.
+
+  async getQuestionTemplates(includeDeleted = false) {
+    if (!this.mongoDb) {
+      return (this.data?.questionTemplates || [])
+        .filter(t => includeDeleted || t.deletedAt == null)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    }
+    const filter = includeDeleted ? {} : { deletedAt: null };
+    return await this.mongoDb!.collection<QuestionTemplate>('questionTemplates')
+      .find(filter).sort({ createdAt: -1 }).toArray();
+  }
+
+  async getQuestionTemplateById(id: string) {
+    if (!this.mongoDb) return this.data?.questionTemplates.find(x => x.id === id) || undefined;
+    return (await this.mongoDb!.collection<QuestionTemplate>('questionTemplates').findOne({ id })) || undefined;
+  }
+
+  /** Every live question assessing a given concept — the direct "what tests S3.4" lookup, index-backed. */
+  async getQuestionTemplatesByConcept(conceptId: string) {
+    if (!this.mongoDb) return (this.data?.questionTemplates || []).filter(t => t.conceptId === conceptId && t.deletedAt == null);
+    return await this.mongoDb!.collection<QuestionTemplate>('questionTemplates')
+      .find({ conceptId, deletedAt: null }).toArray();
+  }
+
+  /**
+   * Every live question that lists `skillId` in either its primary or
+   * supporting skills. This is the key-value lookup the schema exists for:
+   * `skills`/`subskills` are multikey-indexed, so "which questions test
+   * SK18 (Patterns)" is one indexed query, never a scan across every
+   * question x skill combination.
+   */
+  async getQuestionTemplatesBySkill(skillId: string) {
+    if (!this.mongoDb) return (this.data?.questionTemplates || []).filter(t => (t.skills || []).includes(skillId) && t.deletedAt == null);
+    return await this.mongoDb!.collection<QuestionTemplate>('questionTemplates')
+      .find({ skills: skillId, deletedAt: null }).toArray();
+  }
+
+  /** Same lookup at subskill granularity, e.g. "SK18.08" (Identify pattern rule). */
+  async getQuestionTemplatesBySubskill(subskillId: string) {
+    if (!this.mongoDb) return (this.data?.questionTemplates || []).filter(t => (t.subskills || []).includes(subskillId) && t.deletedAt == null);
+    return await this.mongoDb!.collection<QuestionTemplate>('questionTemplates')
+      .find({ subskills: subskillId, deletedAt: null }).toArray();
+  }
+
+  /** Live templates sharing a variant fingerprint. Drives the duplicate warning. */
+  async getQuestionTemplatesByVariantKey(variantKey: string) {
+    if (!this.mongoDb) return (this.data?.questionTemplates || []).filter(t => t.variantKey === variantKey && t.deletedAt == null);
+    return await this.mongoDb!.collection<QuestionTemplate>('questionTemplates')
+      .find({ variantKey, deletedAt: null }).toArray();
+  }
+
+  async addQuestionTemplate(template: QuestionTemplate) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.questionTemplates.push(template);
+        await this.save();
+      }
+      return template;
+    }
+    await this.mongoDb!.collection('questionTemplates').insertOne(template);
+    if (this.data) this.data.questionTemplates.push(template);
+    return template;
+  }
+
+  // --- Teacher Observation Record Methods --------------------------------
+  // See TeacherObservationRecord's own comment for why this is a separate
+  // collection from answerSubmissions/questionTemplates. Addressed by
+  // (studentId, conceptId, cycle) -- the unique index this file's init
+  // sequence creates on that triple is what makes `upsert` below safe as a
+  // real upsert rather than a document-growing append.
+
+  /** One student's ratings across every observed concept, for one cycle. */
+  async getObservationRecordsForStudent(studentId: string, cycle: string) {
+    if (!this.mongoDb) return (this.data?.teacherObservationRecords || []).filter(r => r.studentId === studentId && r.cycle === cycle);
+    return await this.mongoDb!.collection<TeacherObservationRecord>('teacher_observation_records')
+      .find({ studentId, cycle }).toArray();
+  }
+
+  /** A whole class's ratings on one concept, for one cycle -- the class-grid sheet's read path. */
+  async getObservationRecordsForClass(classId: string, cycle: string) {
+    if (!this.mongoDb) return (this.data?.teacherObservationRecords || []).filter(r => r.classId === classId && r.cycle === cycle);
+    return await this.mongoDb!.collection<TeacherObservationRecord>('teacher_observation_records')
+      .find({ classId, cycle }).toArray();
+  }
+
+  /**
+   * Record or update one teacher's rating. Upsert on (studentId, conceptId,
+   * cycle) so re-submitting the same class-grid sheet corrects a rating
+   * rather than duplicating it.
+   */
+  async upsertObservationRecord(record: TeacherObservationRecord) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        const list = this.data.teacherObservationRecords;
+        const idx = list.findIndex(x => x.studentId === record.studentId && x.conceptId === record.conceptId && x.cycle === record.cycle);
+        if (idx === -1) list.push(record);
+        else list[idx] = { ...list[idx], ...record };
+        await this.save();
+      }
+      return record;
+    }
+    await this.mongoDb!.collection<TeacherObservationRecord>('teacher_observation_records').updateOne(
+      { studentId: record.studentId, conceptId: record.conceptId, cycle: record.cycle },
+      { $set: record },
+      { upsert: true }
+    );
+    return record;
+  }
+
+  // --- Attempt Record Methods (Evidence Model, #479) ----------------------
+  // See AttemptRecord's own comment for what this captures and why it's a
+  // separate collection from answerSubmissions.
+
+  /** Every attempt one student has made; richest-evidence-first filtering/sorting is left to callers. */
+  async getAttemptRecordsForStudent(studentId: string): Promise<AttemptRecord[]> {
+    if (!this.mongoDb) return (this.data?.attemptRecords || []).filter(a => a.studentId === studentId);
+    return await this.mongoDb!.collection<AttemptRecord>('attempt_records').find({ studentId }).toArray();
+  }
+
+  /** Append-only -- an attempt is a historical fact, not something a later attempt should overwrite. */
+  async addAttemptRecord(record: AttemptRecord): Promise<AttemptRecord> {
+    if (!this.mongoDb) {
+      if (this.data) {
+        if (!this.data.attemptRecords) this.data.attemptRecords = [];
+        this.data.attemptRecords.push(record);
+        await this.save();
+      }
+      return record;
+    }
+    await this.mongoDb!.collection('attempt_records').insertOne(record);
+    return record;
+  }
+
+  /**
+   * Insert a validated batch in one round trip.
+   *
+   * Callers validate every row before calling: a CSV import that writes half a
+   * file and then rejects the rest leaves the author reconciling two states by
+   * hand, which is worse than importing nothing.
+   */
+  async addQuestionTemplates(templates: QuestionTemplate[]) {
+    if (templates.length === 0) return [];
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.questionTemplates.push(...templates);
+        await this.save();
+      }
+      return templates;
+    }
+    await this.mongoDb!.collection('questionTemplates').insertMany(templates as any[]);
+    if (this.data) this.data.questionTemplates.push(...templates);
+    return templates;
+  }
+
+  async updateQuestionTemplate(id: string, updates: Partial<QuestionTemplate>) {
+    if (!this.mongoDb) {
+      const list = this.data?.questionTemplates;
+      if (!list) return undefined;
+      const idx = list.findIndex(x => x.id === id);
+      if (idx === -1) return undefined;
+      list[idx] = { ...list[idx], ...updates };
+      await this.save();
+      return list[idx];
+    }
+    await this.mongoDb!.collection('questionTemplates').updateOne({ id }, { $set: updates });
+    const t = await this.mongoDb!.collection<QuestionTemplate>('questionTemplates').findOne({ id });
+    if (t && this.data) {
+      const idx = this.data.questionTemplates.findIndex(x => x.id === id);
+      if (idx !== -1) this.data.questionTemplates[idx] = t;
+    }
+    return t || undefined;
+  }
+
+  // --- Question Option Methods -------------------------------------------
+  //
+  // The catalogue of selectable values. Reads are hot (every form render) and
+  // the set is tiny, so these deliberately do no caching: correctness after a
+  // Superadmin adds a value matters more than saving a small query.
+
+  async getQuestionOptions(includeInactive = false) {
+    if (!this.mongoDb) {
+      // Mirrors `.find(filter).sort({ type: 1, key: 1 })` below.
+      return (this.data?.questionOptions || [])
+        .filter(o => includeInactive || o.active === true)
+        .sort((a, b) => (a.type !== b.type ? (a.type < b.type ? -1 : 1) : a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    }
+    const filter = includeInactive ? {} : { active: true };
+    return await this.mongoDb!.collection<QuestionOption>('questionOptions')
+      .find(filter).sort({ type: 1, key: 1 }).toArray();
+  }
+
+  async getQuestionOptionById(id: string) {
+    if (!this.mongoDb) return this.data?.questionOptions.find(x => x.id === id) || undefined;
+    return (await this.mongoDb!.collection<QuestionOption>('questionOptions').findOne({ id })) || undefined;
+  }
+
+  /** Active row with this (type, key), if any. Used to reject duplicate keys. */
+  async getQuestionOptionByKey(type: QuestionOption['type'], key: string) {
+    if (!this.mongoDb) return this.data?.questionOptions.find(o => o.type === type && o.key === key && o.active === true) || undefined;
+    return (await this.mongoDb!.collection<QuestionOption>('questionOptions')
+      .findOne({ type, key, active: true })) || undefined;
+  }
+
+  async addQuestionOption(option: QuestionOption) {
+    if (!this.mongoDb) {
+      if (this.data) {
+        this.data.questionOptions.push(option);
+        await this.save();
+      }
+      return option;
+    }
+    await this.mongoDb!.collection('questionOptions').insertOne(option);
+    if (this.data) this.data.questionOptions.push(option);
+    return option;
+  }
+
+  async updateQuestionOption(id: string, updates: Partial<QuestionOption>) {
+    if (!this.mongoDb) {
+      const list = this.data?.questionOptions;
+      if (!list) return undefined;
+      const idx = list.findIndex(x => x.id === id);
+      if (idx === -1) return undefined;
+      list[idx] = { ...list[idx], ...updates };
+      await this.save();
+      return list[idx];
+    }
+    await this.mongoDb!.collection('questionOptions').updateOne({ id }, { $set: updates });
+    const o = await this.mongoDb!.collection<QuestionOption>('questionOptions').findOne({ id });
+    if (o && this.data) {
+      const idx = this.data.questionOptions.findIndex(x => x.id === id);
+      if (idx !== -1) this.data.questionOptions[idx] = o;
+    }
+    return o || undefined;
+  }
+
+  async getQuestionTemplateStats(totalLevels: number) {
+    if (!this.mongoDb) {
+      const live = (this.data?.questionTemplates || []).filter(t => t.deletedAt == null);
+      return {
+        totalTemplates: live.length,
+        totalLevels,
+        levelsWithTemplate: new Set(live.map(t => t.conceptId)).size,
+        distinctVariants: new Set(live.map(t => t.variantKey)).size,
+      };
+    }
+    const live = await this.mongoDb!.collection<QuestionTemplate>('questionTemplates')
+      .find({ deletedAt: null }).toArray();
+    return {
+      totalTemplates: live.length,
+      totalLevels,
+      levelsWithTemplate: new Set(live.map(t => t.conceptId)).size,
+      distinctVariants: new Set(live.map(t => t.variantKey)).size,
+    };
+  }
+
+  // --- Curriculum Level Methods ---
+  //
+  // The single accessor path for curriculum data. Anything that needs to reason
+  // about levels goes through here rather than hand-authoring a lookup table —
+  // a feature that cannot get what it needs from these is a signal the schema
+  // is missing a field, not licence to start a seventh copy of the taxonomy.
+
+  // --- Question bank review ---------------------------------------------
+  //
+  // The bank holds the concrete questions that already exist (levels 22-59 of
+  // the retired numbering). Mapping each one to a 93-space level is what lets
+  // the 59 space be retired WITHOUT a level-to-level crosswalk: content is
+  // addressed by the question's own tag rather than by the level it came from.
+
+  async getQuestionBank(opts: {
+    level?: number;
+    sectionType?: string;
+    status?: 'untagged' | 'mapped' | 'retired';
+    mappedLevel?: number;
+    limit?: number;
+    skip?: number;
+  } = {}) {
+    const filter: any = {};
+    if (opts.level !== undefined) filter.level = opts.level;
+    if (opts.sectionType) filter.sectionType = opts.sectionType;
+    if (opts.status) filter.reviewStatus = opts.status;
+    if (opts.mappedLevel !== undefined) filter.mappedLevel = opts.mappedLevel;
+    const coll = this.mongoDb!.collection<QuestionBankEntry>('questionBank');
+    const [items, total] = await Promise.all([
+      coll.find(filter).sort({ level: 1, section: 1, questionNumber: 1 })
+        .skip(opts.skip || 0).limit(opts.limit || 50).toArray(),
+      coll.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
+
+  async getQuestionBankEntry(questionId: string) {
+    return (await this.mongoDb!.collection<QuestionBankEntry>('questionBank')
+      .findOne({ questionId })) || undefined;
+  }
+
+  /** Apply a review decision to one question. Returns the updated row. */
+  async reviewQuestion(questionId: string, patch: {
+    mappedLevel?: number | null;
+    conceptId?: string;
+    reviewStatus: 'untagged' | 'mapped' | 'retired';
+    reviewedBy: string;
+    reviewNote?: string;
+  }) {
+    const coll = this.mongoDb!.collection<QuestionBankEntry>('questionBank');
+    await coll.updateOne({ questionId }, {
+      $set: { ...patch, reviewedAt: new Date().toISOString() } as any,
+    });
+    return await this.getQuestionBankEntry(questionId);
+  }
+
+  /** Apply one decision to every question in a (level, section). */
+  async reviewQuestionsBulk(filter: { level: number; section?: string; sectionType?: string }, patch: {
+    mappedLevel?: number | null;
+    conceptId?: string;
+    reviewStatus: 'untagged' | 'mapped' | 'retired';
+    reviewedBy: string;
+  }) {
+    const q: any = { level: filter.level };
+    if (filter.section) q.section = filter.section;
+    if (filter.sectionType) q.sectionType = filter.sectionType;
+    const res = await this.mongoDb!.collection<QuestionBankEntry>('questionBank').updateMany(q, {
+      $set: { ...patch, reviewedAt: new Date().toISOString() } as any,
+    });
+    return { matched: res.matchedCount, modified: res.modifiedCount };
+  }
+
+  /**
+   * Review progress, plus the shape of the work remaining.
+   *
+   * `legacyLevelsWithoutQuestions` is the honest other half: the bank only
+   * covers levels 22-59, so those legacy levels have nothing to tag and must be
+   * mapped level-to-level instead.
+   */
+  async getQuestionBankProgress() {
+    const coll = this.mongoDb!.collection<QuestionBankEntry>('questionBank');
+    const [total, mapped, retired, untagged, levels, targets] = await Promise.all([
+      coll.countDocuments({}),
+      coll.countDocuments({ reviewStatus: 'mapped' }),
+      coll.countDocuments({ reviewStatus: 'retired' }),
+      coll.countDocuments({ reviewStatus: 'untagged' }),
+      coll.distinct('level'),
+      coll.distinct('mappedLevel', { reviewStatus: 'mapped' }),
+    ]);
+    const byLevel = await coll.aggregate([
+      { $group: {
+          _id: '$level',
+          total: { $sum: 1 },
+          mapped: { $sum: { $cond: [{ $eq: ['$reviewStatus', 'mapped'] }, 1, 0] } },
+          retired: { $sum: { $cond: [{ $eq: ['$reviewStatus', 'retired'] }, 1, 0] } },
+      } },
+      { $sort: { _id: 1 } },
+    ]).toArray();
+    return {
+      total, mapped, retired, untagged,
+      legacyLevelsInBank: levels.sort((a: number, b: number) => a - b),
+      targetLevelsCovered: (targets as (number | null)[]).filter((n): n is number => typeof n === 'number').sort((a, b) => a - b),
+      byLevel: byLevel.map((r: any) => ({ level: r._id, total: r.total, mapped: r.mapped, retired: r.retired })),
+    };
+  }
+
+  async getCurriculumLevels() {
+    return await this.mongoDb!.collection<CurriculumLevel>('curriculumLevels')
+      .find({}).sort({ levelNumber: 1 }).toArray();
+  }
+
+  async getCurriculumLevel(levelNumber: number) {
+    return (await this.mongoDb!.collection<CurriculumLevel>('curriculumLevels')
+      .findOne({ levelNumber })) || undefined;
+  }
+
+  /** Look a level up by its permanent identity rather than by its position. */
+  async getCurriculumLevelByConceptId(conceptId: string) {
+    return (await this.mongoDb!.collection<CurriculumLevel>('curriculumLevels')
+      .findOne({ conceptId })) || undefined;
+  }
+
+  /**
+   * Resolve a retired 1..59 worksheet-engine id to its 93-space level.
+   *
+   * Exists only for the migration window: call sites that still hold a 59-space
+   * number use this to translate rather than carrying their own mapping. When
+   * the last such call site is gone, this method and `legacyLevel59` go with it.
+   */
+  async getCurriculumLevelByLegacy59(legacyLevel59: number) {
+    return (await this.mongoDb!.collection<CurriculumLevel>('curriculumLevels')
+      .findOne({ legacyLevel59 })) || undefined;
+  }
+
+  /**
+   * Point a 93-space level at a retired 1-59 level, or clear the pointer.
+   *
+   * Passing `null` as the target clears whichever level currently claims
+   * `legacyLevel59`, so a mis-mapping can be undone without knowing where it
+   * landed.
+   */
+  async setCurriculumLegacyMapping(levelNumber: number | null, legacyLevel59: number) {
+    const coll = this.mongoDb!.collection<CurriculumLevel>('curriculumLevels');
+    // Only one 93-space level may claim a given legacy id.
+    await coll.updateMany({ legacyLevel59 }, { $set: { legacyLevel59: null } });
+    if (levelNumber !== null) {
+      await coll.updateOne({ levelNumber }, {
+        $set: { legacyLevel59, updatedAt: new Date().toISOString() },
+      });
+    }
+  }
+
+  /** Coverage summary — how much of the 93 can actually be rendered today. */
+  async getCurriculumCoverage() {
+    const levels = await this.getCurriculumLevels();
+    return {
+      totalLevels: levels.length,
+      withStaticHtml: levels.filter(l => l.hasStaticHtml).length,
+      withBuilder: levels.filter(l => l.hasBuilder).length,
+      withAnyContent: levels.filter(l => l.hasStaticHtml || l.hasBuilder).length,
+      mappedFromLegacy59: levels.filter(l => l.legacyLevel59 !== null).length,
+    };
+  }
+
+  // --- Diagnostic Answer Key Methods ---
+
+  async addDiagnosticAnswerKey(key: DiagnosticAnswerKey) {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('diagnostic_answer_keys').insertOne(key);
+    }
+    if (this.data) {
+      if (!this.data.diagnosticAnswerKeys) this.data.diagnosticAnswerKeys = [];
+      this.data.diagnosticAnswerKeys.push(key);
+    }
+    return key;
+  }
+
+  async getDiagnosticAnswerKeys(jobId: string): Promise<DiagnosticAnswerKey[]> {
+    if (this.mongoDb) {
+      return await this.mongoDb.collection<DiagnosticAnswerKey>('diagnostic_answer_keys').find({ jobId }).toArray();
+    }
+    return (this.data?.diagnosticAnswerKeys || []).filter(k => k.jobId === jobId);
+  }
+
+  async getStudentDiagnosticAnswerKey(studentId: string, jobId?: string): Promise<DiagnosticAnswerKey | null> {
+      if (this.mongoDb) {
+        const query: any = { studentId };
+        if (jobId) query.jobId = jobId;
+        return await this.mongoDb.collection<DiagnosticAnswerKey>('diagnostic_answer_keys').findOne(query, { sort: { createdAt: -1 } });
+      }
+      const keys = (this.data?.diagnosticAnswerKeys || []).filter(k => k.studentId === studentId && (!jobId || k.jobId === jobId));
+      return keys[keys.length - 1] || null;
+    }
+
+    // Fetch the latest diagnostic answer key for any student in a given class —
+    // used when a single sheet scan is performed without a specific student
+    // selected (the OCR can't ask "which student", so it grabs the most
+    // recently generated paper for that class). All students in the same class
+    // get the same paper up to per-student randomization, so this is a safe
+    // approximation when no per-student answer key is available.
+    async getLatestClassAnswerKey(classNumber: number): Promise<DiagnosticAnswerKey | null> {
+      if (this.mongoDb) {
+        return await this.mongoDb.collection<DiagnosticAnswerKey>('diagnostic_answer_keys')
+          .findOne({ classNumber }, { sort: { createdAt: -1 } });
+      }
+      const keys = (this.data?.diagnosticAnswerKeys || [])
+        .filter(k => k.classNumber === classNumber)
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      return keys[0] || null;
+    }
 
   // --- Preloaded Question Pool (Mathematical Curriculum Questions Classes 2-4) ---
   private getSeedQuestions(): Question[] {
@@ -797,6 +3922,9 @@ export class DBStore {
       { id: 'u7_ldh2_vol', email: 'vol.ldh2@fln.org', name: 'Gurpreet Kaur (Volunteer)', role: UserRole.VOLUNTEER, assignedSchools: ['gps-pb-ldh2-013'] }
     ];
 
+    // Give every seeded account the shared demo password as a bcrypt hash.
+    users.forEach(u => { u.passwordHash = SEED_DEMO_PASSWORD_HASH; });
+
     const classes: ClassGroup[] = [
       { id: 'c1', schoolId: 'gps-mt-001', className: 'Class 2', section: 'A', teacherId: 'u6' },
       { id: 'c2', schoolId: 'gps-mt-001', className: 'Class 3', section: 'A', teacherId: 'u6' },
@@ -832,8 +3960,7 @@ export class DBStore {
         currentLevel: 2,
         targetLevel: 3,
         aadharMasked: 'XXXX-XXXX-4521',
-        levelHistory: [{ level: 1, date: '2026-04-10', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 5
+        levelHistory: [{ level: 1, date: '2026-04-10', reason: 'Baseline' }],
       },
       {
         id: 's2',
@@ -846,8 +3973,7 @@ export class DBStore {
         currentLevel: 3,
         targetLevel: 4,
         aadharMasked: 'XXXX-XXXX-9874',
-        levelHistory: [{ level: 2, date: '2026-04-10', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 3
+        levelHistory: [{ level: 2, date: '2026-04-10', reason: 'Baseline' }],
       },
       {
         id: 's3',
@@ -860,8 +3986,7 @@ export class DBStore {
         currentLevel: 4,
         targetLevel: 5,
         aadharMasked: 'XXXX-XXXX-1122',
-        levelHistory: [{ level: 3, date: '2026-04-10', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 7
+        levelHistory: [{ level: 3, date: '2026-04-10', reason: 'Baseline' }],
       },
       {
         id: 's4',
@@ -873,8 +3998,7 @@ export class DBStore {
         currentLevel: 1,
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-5566',
-        levelHistory: [{ level: 1, date: '2026-05-15', reason: 'Volunteer Diagnostic Placement' }],
-        streak: 1
+        levelHistory: [{ level: 1, date: '2026-05-15', reason: 'Baseline' }],
       },
       {
         id: 's5',
@@ -886,8 +4010,7 @@ export class DBStore {
         currentLevel: 2,
         targetLevel: 3,
         aadharMasked: 'XXXX-XXXX-8811',
-        levelHistory: [{ level: 1, date: '2026-05-20', reason: 'Volunteer Diagnostic Placement' }],
-        streak: 2
+        levelHistory: [{ level: 1, date: '2026-05-20', reason: 'Baseline' }],
       },
       {
         id: 's6',
@@ -900,8 +4023,7 @@ export class DBStore {
         currentLevel: 3,
         targetLevel: 4,
         aadharMasked: 'XXXX-XXXX-7231',
-        levelHistory: [{ level: 2, date: '2026-06-01', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 4
+        levelHistory: [{ level: 2, date: '2026-06-01', reason: 'Baseline' }],
       },
       {
         id: 's7',
@@ -914,8 +4036,7 @@ export class DBStore {
         currentLevel: 5,
         targetLevel: 6,
         aadharMasked: 'XXXX-XXXX-1002',
-        levelHistory: [{ level: 3, date: '2026-06-01', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 9
+        levelHistory: [{ level: 3, date: '2026-06-01', reason: 'Baseline' }],
       },
       {
         id: 's8',
@@ -928,8 +4049,7 @@ export class DBStore {
         currentLevel: 2,
         targetLevel: 3,
         aadharMasked: 'XXXX-XXXX-3490',
-        levelHistory: [{ level: 2, date: '2026-06-01', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 3
+        levelHistory: [{ level: 2, date: '2026-06-01', reason: 'Baseline' }],
       },
       {
         id: 's9',
@@ -942,8 +4062,7 @@ export class DBStore {
         currentLevel: 4,
         targetLevel: 5,
         aadharMasked: 'XXXX-XXXX-1992',
-        levelHistory: [{ level: 3, date: '2026-06-15', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 6
+        levelHistory: [{ level: 3, date: '2026-06-15', reason: 'Baseline' }],
       },
       {
         id: 's10',
@@ -956,8 +4075,7 @@ export class DBStore {
         currentLevel: 5,
         targetLevel: 6,
         aadharMasked: 'XXXX-XXXX-8822',
-        levelHistory: [{ level: 4, date: '2026-06-15', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 11
+        levelHistory: [{ level: 4, date: '2026-06-15', reason: 'Baseline' }],
       },
       {
         id: 's11',
@@ -970,8 +4088,7 @@ export class DBStore {
         currentLevel: 3,
         targetLevel: 4,
         aadharMasked: 'XXXX-XXXX-3344',
-        levelHistory: [{ level: 2, date: '2026-06-15', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 5
+        levelHistory: [{ level: 2, date: '2026-06-15', reason: 'Baseline' }],
       },
       {
         id: 's12',
@@ -983,8 +4100,7 @@ export class DBStore {
         currentLevel: 1,
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-4545',
-        levelHistory: [{ level: 1, date: '2026-06-05', reason: 'Volunteer Diagnostic Placement' }],
-        streak: 2
+        levelHistory: [{ level: 1, date: '2026-06-05', reason: 'Baseline' }],
       },
       {
         id: 's13',
@@ -996,8 +4112,7 @@ export class DBStore {
         currentLevel: 2,
         targetLevel: 3,
         aadharMasked: 'XXXX-XXXX-2121',
-        levelHistory: [{ level: 1, date: '2026-06-05', reason: 'Volunteer Diagnostic Placement' }],
-        streak: 3
+        levelHistory: [{ level: 1, date: '2026-06-05', reason: 'Baseline' }],
       },
       {
         id: 's14',
@@ -1010,8 +4125,7 @@ export class DBStore {
         currentLevel: 3,
         targetLevel: 4,
         aadharMasked: 'XXXX-XXXX-1155',
-        levelHistory: [{ level: 2, date: '2026-06-20', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 6
+        levelHistory: [{ level: 2, date: '2026-06-20', reason: 'Baseline' }],
       },
       {
         id: 's15',
@@ -1024,8 +4138,7 @@ export class DBStore {
         currentLevel: 4,
         targetLevel: 5,
         aadharMasked: 'XXXX-XXXX-2266',
-        levelHistory: [{ level: 3, date: '2026-06-20', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 8
+        levelHistory: [{ level: 3, date: '2026-06-20', reason: 'Baseline' }],
       },
       {
         id: 's16',
@@ -1038,8 +4151,7 @@ export class DBStore {
         currentLevel: 5,
         targetLevel: 6,
         aadharMasked: 'XXXX-XXXX-3377',
-        levelHistory: [{ level: 4, date: '2026-06-20', reason: 'Onboarding Diagnostic Placement' }],
-        streak: 12
+        levelHistory: [{ level: 4, date: '2026-06-20', reason: 'Baseline' }],
       },
       // ── Unplaced students (empty levelHistory) for Pending Diagnostics ──
       {
@@ -1053,7 +4165,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-6677',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_2',
@@ -1066,7 +4177,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-7788',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_3',
@@ -1080,7 +4190,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-8899',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_4',
@@ -1094,7 +4203,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-9900',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_5',
@@ -1108,7 +4216,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1100',
         levelHistory: [],
-        streak: 0
       },
       // ── Additional placed students at Level 8 ──
       {
@@ -1123,8 +4230,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 9,
         aadharMasked: 'XXXX-XXXX-1201',
-        levelHistory: [{ level: 4, date: '2026-04-15', reason: 'Onboarding Diagnostic Placement' }, { level: 6, date: '2026-05-20', reason: 'Mid-year worksheet performance' }, { level: 8, date: '2026-07-01', reason: 'End-of-year worksheet performance' }],
-        streak: 15
+        levelHistory: [{ level: 4, date: '2026-04-15', reason: 'Baseline' }, { level: 6, date: '2026-05-20', reason: 'Mid-year' }, { level: 8, date: '2026-07-01', reason: 'End-of-year' }],
       },
       {
         id: 's18',
@@ -1138,8 +4244,7 @@ export class DBStore {
         currentSubLevel: 1,
         targetLevel: 9,
         aadharMasked: 'XXXX-XXXX-1202',
-        levelHistory: [{ level: 3, date: '2026-05-01', reason: 'Onboarding Diagnostic Placement' }, { level: 5, date: '2026-06-10', reason: 'Baseline worksheet' }, { level: 8, date: '2026-07-03', reason: 'Mid-year worksheet' }],
-        streak: 10
+        levelHistory: [{ level: 3, date: '2026-05-01', reason: 'Baseline' }, { level: 5, date: '2026-06-10', reason: 'Baseline' }, { level: 8, date: '2026-07-03', reason: 'Mid-year' }],
       },
       {
         id: 's19',
@@ -1153,8 +4258,7 @@ export class DBStore {
         currentSubLevel: 2,
         targetLevel: 9,
         aadharMasked: 'XXXX-XXXX-1203',
-        levelHistory: [{ level: 2, date: '2026-04-20', reason: 'Onboarding Diagnostic Placement' }, { level: 8, date: '2026-06-25', reason: 'Remedial intervention' }],
-        streak: 6
+        levelHistory: [{ level: 2, date: '2026-04-20', reason: 'Baseline' }, { level: 8, date: '2026-06-25', reason: 'Remedial intervention' }],
       },
       // ── Students at Level 10 ──
       {
@@ -1169,8 +4273,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 11,
         aadharMasked: 'XXXX-XXXX-1204',
-        levelHistory: [{ level: 5, date: '2026-04-10', reason: 'Onboarding Diagnostic Placement' }, { level: 7, date: '2026-05-15', reason: 'Baseline worksheet' }, { level: 10, date: '2026-06-30', reason: 'Mid-year worksheet' }],
-        streak: 18
+        levelHistory: [{ level: 5, date: '2026-04-10', reason: 'Baseline' }, { level: 7, date: '2026-05-15', reason: 'Baseline' }, { level: 10, date: '2026-06-30', reason: 'Mid-year' }],
       },
       {
         id: 's21',
@@ -1184,8 +4287,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 11,
         aadharMasked: 'XXXX-XXXX-1205',
-        levelHistory: [{ level: 6, date: '2026-05-05', reason: 'Onboarding Diagnostic Placement' }, { level: 8, date: '2026-06-01', reason: 'Baseline worksheet' }, { level: 10, date: '2026-07-02', reason: 'Mid-year worksheet' }],
-        streak: 14
+        levelHistory: [{ level: 6, date: '2026-05-05', reason: 'Baseline' }, { level: 8, date: '2026-06-01', reason: 'Baseline' }, { level: 10, date: '2026-07-02', reason: 'Mid-year' }],
       },
       // ── Students at Level 12 ──
       {
@@ -1200,8 +4302,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 13,
         aadharMasked: 'XXXX-XXXX-1206',
-        levelHistory: [{ level: 7, date: '2026-04-25', reason: 'Onboarding Diagnostic Placement' }, { level: 10, date: '2026-06-05', reason: 'Baseline worksheet' }, { level: 12, date: '2026-07-04', reason: 'Mid-year worksheet' }],
-        streak: 20
+        levelHistory: [{ level: 7, date: '2026-04-25', reason: 'Baseline' }, { level: 10, date: '2026-06-05', reason: 'Baseline' }, { level: 12, date: '2026-07-04', reason: 'Mid-year' }],
       },
       {
         id: 's23',
@@ -1215,8 +4316,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 13,
         aadharMasked: 'XXXX-XXXX-1207',
-        levelHistory: [{ level: 8, date: '2026-05-10', reason: 'Onboarding Diagnostic Placement' }, { level: 12, date: '2026-06-28', reason: 'Baseline worksheet' }],
-        streak: 11
+        levelHistory: [{ level: 8, date: '2026-05-10', reason: 'Baseline' }, { level: 12, date: '2026-06-28', reason: 'Baseline' }],
       },
       // ── Students at Level 15 ──
       {
@@ -1231,8 +4331,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 16,
         aadharMasked: 'XXXX-XXXX-1208',
-        levelHistory: [{ level: 8, date: '2026-04-10', reason: 'Onboarding Diagnostic Placement' }, { level: 11, date: '2026-05-20', reason: 'Baseline worksheet' }, { level: 15, date: '2026-07-01', reason: 'Mid-year worksheet' }],
-        streak: 25
+        levelHistory: [{ level: 8, date: '2026-04-10', reason: 'Baseline' }, { level: 11, date: '2026-05-20', reason: 'Baseline' }, { level: 15, date: '2026-07-01', reason: 'Mid-year' }],
       },
       {
         id: 's25',
@@ -1246,8 +4345,7 @@ export class DBStore {
         currentSubLevel: 1,
         targetLevel: 16,
         aadharMasked: 'XXXX-XXXX-1209',
-        levelHistory: [{ level: 10, date: '2026-05-15', reason: 'Onboarding Diagnostic Placement' }, { level: 15, date: '2026-07-02', reason: 'Baseline worksheet' }],
-        streak: 8
+        levelHistory: [{ level: 10, date: '2026-05-15', reason: 'Baseline' }, { level: 15, date: '2026-07-02', reason: 'Baseline' }],
       },
       // ── Students at various other levels ──
       {
@@ -1262,8 +4360,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 6,
         aadharMasked: 'XXXX-XXXX-1210',
-        levelHistory: [{ level: 2, date: '2026-04-10', reason: 'Onboarding Diagnostic Placement' }, { level: 5, date: '2026-06-20', reason: 'Baseline worksheet' }],
-        streak: 7
+        levelHistory: [{ level: 2, date: '2026-04-10', reason: 'Baseline' }, { level: 5, date: '2026-06-20', reason: 'Baseline' }],
       },
       {
         id: 's27',
@@ -1276,8 +4373,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 4,
         aadharMasked: 'XXXX-XXXX-1211',
-        levelHistory: [{ level: 1, date: '2026-05-15', reason: 'Volunteer Diagnostic Placement' }, { level: 3, date: '2026-06-25', reason: 'Baseline worksheet' }],
-        streak: 4
+        levelHistory: [{ level: 1, date: '2026-05-15', reason: 'Baseline' }, { level: 3, date: '2026-06-25', reason: 'Baseline' }],
       },
       {
         id: 's28',
@@ -1291,8 +4387,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 7,
         aadharMasked: 'XXXX-XXXX-1212',
-        levelHistory: [{ level: 2, date: '2026-05-01', reason: 'Onboarding Diagnostic Placement' }, { level: 4, date: '2026-06-05', reason: 'Baseline worksheet' }, { level: 6, date: '2026-07-01', reason: 'Mid-year worksheet' }],
-        streak: 9
+        levelHistory: [{ level: 2, date: '2026-05-01', reason: 'Baseline' }, { level: 4, date: '2026-06-05', reason: 'Baseline' }, { level: 6, date: '2026-07-01', reason: 'Mid-year' }],
       },
       {
         id: 's29',
@@ -1306,8 +4401,7 @@ export class DBStore {
         currentSubLevel: 1,
         targetLevel: 5,
         aadharMasked: 'XXXX-XXXX-1213',
-        levelHistory: [{ level: 1, date: '2026-05-20', reason: 'Volunteer Diagnostic Placement' }, { level: 4, date: '2026-07-02', reason: 'Baseline worksheet' }],
-        streak: 3
+        levelHistory: [{ level: 1, date: '2026-05-20', reason: 'Baseline' }, { level: 4, date: '2026-07-02', reason: 'Baseline' }],
       },
       {
         id: 's30',
@@ -1321,8 +4415,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 8,
         aadharMasked: 'XXXX-XXXX-1214',
-        levelHistory: [{ level: 3, date: '2026-04-25', reason: 'Onboarding Diagnostic Placement' }, { level: 5, date: '2026-06-01', reason: 'Baseline worksheet' }, { level: 7, date: '2026-07-03', reason: 'Mid-year worksheet' }],
-        streak: 12
+        levelHistory: [{ level: 3, date: '2026-04-25', reason: 'Baseline' }, { level: 5, date: '2026-06-01', reason: 'Baseline' }, { level: 7, date: '2026-07-03', reason: 'Mid-year' }],
       },
       {
         id: 's31',
@@ -1336,8 +4429,7 @@ export class DBStore {
         currentSubLevel: 2,
         targetLevel: 7,
         aadharMasked: 'XXXX-XXXX-1215',
-        levelHistory: [{ level: 2, date: '2026-04-20', reason: 'Onboarding Diagnostic Placement' }, { level: 6, date: '2026-06-18', reason: 'Baseline worksheet' }],
-        streak: 5
+        levelHistory: [{ level: 2, date: '2026-04-20', reason: 'Baseline' }, { level: 6, date: '2026-06-18', reason: 'Baseline' }],
       },
       {
         id: 's32',
@@ -1351,8 +4443,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 10,
         aadharMasked: 'XXXX-XXXX-1216',
-        levelHistory: [{ level: 5, date: '2026-05-05', reason: 'Onboarding Diagnostic Placement' }, { level: 7, date: '2026-06-10', reason: 'Baseline worksheet' }, { level: 9, date: '2026-07-02', reason: 'Mid-year worksheet' }],
-        streak: 13
+        levelHistory: [{ level: 5, date: '2026-05-05', reason: 'Baseline' }, { level: 7, date: '2026-06-10', reason: 'Baseline' }, { level: 9, date: '2026-07-02', reason: 'Mid-year' }],
       },
       {
         id: 's33',
@@ -1366,8 +4457,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 12,
         aadharMasked: 'XXXX-XXXX-1217',
-        levelHistory: [{ level: 6, date: '2026-05-10', reason: 'Onboarding Diagnostic Placement' }, { level: 8, date: '2026-06-15', reason: 'Baseline worksheet' }, { level: 11, date: '2026-07-04', reason: 'Mid-year worksheet' }],
-        streak: 16
+        levelHistory: [{ level: 6, date: '2026-05-10', reason: 'Baseline' }, { level: 8, date: '2026-06-15', reason: 'Baseline' }, { level: 11, date: '2026-07-04', reason: 'Mid-year' }],
       },
       {
         id: 's34',
@@ -1381,8 +4471,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 8,
         aadharMasked: 'XXXX-XXXX-1218',
-        levelHistory: [{ level: 3, date: '2026-05-20', reason: 'Onboarding Diagnostic Placement' }, { level: 7, date: '2026-07-01', reason: 'Baseline worksheet' }],
-        streak: 8
+        levelHistory: [{ level: 3, date: '2026-05-20', reason: 'Baseline' }, { level: 7, date: '2026-07-01', reason: 'Baseline' }],
       },
       {
         id: 's35',
@@ -1396,8 +4485,7 @@ export class DBStore {
         currentSubLevel: 1,
         targetLevel: 12,
         aadharMasked: 'XXXX-XXXX-1219',
-        levelHistory: [{ level: 6, date: '2026-05-15', reason: 'Onboarding Diagnostic Placement' }, { level: 9, date: '2026-06-20', reason: 'Baseline worksheet' }, { level: 11, date: '2026-07-03', reason: 'Mid-year worksheet' }],
-        streak: 9
+        levelHistory: [{ level: 6, date: '2026-05-15', reason: 'Baseline' }, { level: 9, date: '2026-06-20', reason: 'Baseline' }, { level: 11, date: '2026-07-03', reason: 'Mid-year' }],
       },
       {
         id: 's36',
@@ -1411,8 +4499,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 14,
         aadharMasked: 'XXXX-XXXX-1220',
-        levelHistory: [{ level: 8, date: '2026-05-01', reason: 'Onboarding Diagnostic Placement' }, { level: 11, date: '2026-06-10', reason: 'Baseline worksheet' }, { level: 13, date: '2026-07-02', reason: 'Mid-year worksheet' }],
-        streak: 17
+        levelHistory: [{ level: 8, date: '2026-05-01', reason: 'Baseline' }, { level: 11, date: '2026-06-10', reason: 'Baseline' }, { level: 13, date: '2026-07-02', reason: 'Mid-year' }],
       },
       {
         id: 's37',
@@ -1426,8 +4513,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 15,
         aadharMasked: 'XXXX-XXXX-1221',
-        levelHistory: [{ level: 9, date: '2026-05-10', reason: 'Onboarding Diagnostic Placement' }, { level: 12, date: '2026-06-20', reason: 'Baseline worksheet' }, { level: 14, date: '2026-07-04', reason: 'Mid-year worksheet' }],
-        streak: 19
+        levelHistory: [{ level: 9, date: '2026-05-10', reason: 'Baseline' }, { level: 12, date: '2026-06-20', reason: 'Baseline' }, { level: 14, date: '2026-07-04', reason: 'Mid-year' }],
       },
       {
         id: 's38',
@@ -1441,8 +4527,7 @@ export class DBStore {
         currentSubLevel: 2,
         targetLevel: 10,
         aadharMasked: 'XXXX-XXXX-1222',
-        levelHistory: [{ level: 4, date: '2026-04-25', reason: 'Onboarding Diagnostic Placement' }, { level: 9, date: '2026-06-28', reason: 'Baseline worksheet' }],
-        streak: 7
+        levelHistory: [{ level: 4, date: '2026-04-25', reason: 'Baseline' }, { level: 9, date: '2026-06-28', reason: 'Baseline' }],
       },
       {
         id: 's39',
@@ -1456,8 +4541,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 7,
         aadharMasked: 'XXXX-XXXX-1223',
-        levelHistory: [{ level: 2, date: '2026-04-10', reason: 'Onboarding Diagnostic Placement' }, { level: 4, date: '2026-05-25', reason: 'Baseline worksheet' }, { level: 6, date: '2026-07-01', reason: 'Mid-year worksheet' }],
-        streak: 11
+        levelHistory: [{ level: 2, date: '2026-04-10', reason: 'Baseline' }, { level: 4, date: '2026-05-25', reason: 'Baseline' }, { level: 6, date: '2026-07-01', reason: 'Mid-year' }],
       },
       // ── Students in Bathinda (lagging district) ──
       {
@@ -1472,8 +4556,7 @@ export class DBStore {
         currentSubLevel: 2,
         targetLevel: 3,
         aadharMasked: 'XXXX-XXXX-1224',
-        levelHistory: [{ level: 1, date: '2026-05-01', reason: 'Onboarding Diagnostic Placement' }, { level: 2, date: '2026-06-20', reason: 'Baseline worksheet' }],
-        streak: 2
+        levelHistory: [{ level: 1, date: '2026-05-01', reason: 'Baseline' }, { level: 2, date: '2026-06-20', reason: 'Baseline' }],
       },
       {
         id: 's41',
@@ -1487,8 +4570,7 @@ export class DBStore {
         currentSubLevel: 1,
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1225',
-        levelHistory: [{ level: 1, date: '2026-06-01', reason: 'Volunteer Diagnostic Placement' }],
-        streak: 1
+        levelHistory: [{ level: 1, date: '2026-06-01', reason: 'Baseline' }],
       },
       {
         id: 's42',
@@ -1502,8 +4584,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 4,
         aadharMasked: 'XXXX-XXXX-1226',
-        levelHistory: [{ level: 1, date: '2026-05-10', reason: 'Onboarding Diagnostic Placement' }, { level: 3, date: '2026-06-25', reason: 'Baseline worksheet' }],
-        streak: 4
+        levelHistory: [{ level: 1, date: '2026-05-10', reason: 'Baseline' }, { level: 3, date: '2026-06-25', reason: 'Baseline' }],
       },
       // ── Students in Amritsar (low-strength school) ──
       {
@@ -1518,8 +4599,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1227',
-        levelHistory: [{ level: 1, date: '2026-06-10', reason: 'Volunteer Diagnostic Placement' }],
-        streak: 1
+        levelHistory: [{ level: 1, date: '2026-06-10', reason: 'Baseline' }],
       },
       {
         id: 's44',
@@ -1533,8 +4613,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 3,
         aadharMasked: 'XXXX-XXXX-1228',
-        levelHistory: [{ level: 1, date: '2026-06-10', reason: 'Volunteer Diagnostic Placement' }, { level: 2, date: '2026-07-01', reason: 'Baseline worksheet' }],
-        streak: 2
+        levelHistory: [{ level: 1, date: '2026-06-10', reason: 'Baseline' }, { level: 2, date: '2026-07-01', reason: 'Baseline' }],
       },
       // ── Students in Jaipur Rural North ──
       {
@@ -1549,8 +4628,7 @@ export class DBStore {
         currentSubLevel: 0,
         targetLevel: 6,
         aadharMasked: 'XXXX-XXXX-1229',
-        levelHistory: [{ level: 2, date: '2026-05-15', reason: 'Onboarding Diagnostic Placement' }, { level: 5, date: '2026-06-28', reason: 'Baseline worksheet' }],
-        streak: 6
+        levelHistory: [{ level: 2, date: '2026-05-15', reason: 'Baseline' }, { level: 5, date: '2026-06-28', reason: 'Baseline' }],
       },
       {
         id: 's46',
@@ -1564,8 +4642,7 @@ export class DBStore {
         currentSubLevel: 1,
         targetLevel: 4,
         aadharMasked: 'XXXX-XXXX-1230',
-        levelHistory: [{ level: 1, date: '2026-05-20', reason: 'Volunteer Diagnostic Placement' }, { level: 3, date: '2026-07-01', reason: 'Baseline worksheet' }],
-        streak: 3
+        levelHistory: [{ level: 1, date: '2026-05-20', reason: 'Baseline' }, { level: 3, date: '2026-07-01', reason: 'Baseline' }],
       },
       // ── Unplaced students needing diagnostics ──
       {
@@ -1580,7 +4657,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1231',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_7',
@@ -1594,7 +4670,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1232',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_8',
@@ -1608,7 +4683,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1233',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_9',
@@ -1622,7 +4696,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1234',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_10',
@@ -1636,7 +4709,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1235',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_11',
@@ -1650,7 +4722,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1236',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_12',
@@ -1664,7 +4735,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1237',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_13',
@@ -1678,7 +4748,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1238',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_14',
@@ -1692,7 +4761,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1239',
         levelHistory: [],
-        streak: 0
       },
       {
         id: 's_new_15',
@@ -1706,7 +4774,6 @@ export class DBStore {
         targetLevel: 2,
         aadharMasked: 'XXXX-XXXX-1240',
         levelHistory: [],
-        streak: 0
       }
     ];
 
@@ -2478,13 +5545,39 @@ export class DBStore {
       questions: seedQuestions,
       worksheets,
       levelWorksheets: [],
+      levelHtmlTemplates: [],
+      questionBank: [],
       answerSubmissions,
       evaluationReports,
       tickets,
       logbook,
       announcements,
       interventions,
-      bestPractices
+      bestPractices,
+      diagnosticAnswerKeys: [],
+      certifications: [],
+      competencyRequirements: getSeedCompetencyRequirements(),
+      misconceptionClusters: [],
+      testHistory: [],
+      // Seeded empty on purpose: question logics are pedagogy authored by a real
+      // Superadmin, and inventing demo ones would put fabricated curriculum
+      // intent in front of the question-generation pipeline.
+      questionLogics: [],
+      questionTemplates: [],
+            questionOptions: [],
+      // Populated by `npm run seed:levels`, not by the demo seed — the
+      // curriculum is real data with one source, not fixture content.
+      curriculumLevels: [],
+      studentCycleLocks: [],
+
+      generationWindows: [],
+      // Seeded empty on purpose, same reasoning as questionLogics above: a
+      // teacher's observation of a real child is not something to fabricate
+      // demo data for.
+      teacherObservationRecords: [],
+      // Same reasoning again -- a child's actual hints/scaffolding evidence
+      // isn't something to fabricate demo data for either.
+      attemptRecords: []
     };
   }
 }

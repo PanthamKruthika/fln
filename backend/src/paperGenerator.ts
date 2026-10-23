@@ -2,11 +2,27 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import type { PDFFont } from 'pdf-lib';
 import { randomUUID } from 'crypto';
-import { Question } from './db';
+import { Question, dbStore } from './db';
+import { getLevelForConcept, isBalvatikaStage } from './config/curriculumMap';
+import {
+  MIN_ANSWER_BOX_HEIGHT_PT,
+  MIN_FONT_SIZE_PT,
+  PAGE_BOTTOM_MARGIN_PT,
+  QUESTIONS_PER_PAGE_MAX,
+  QUESTION_GAP_PT,
+  planQuestionPages,
+  answerSpaceFor,
+  CIRCLE_PADDING_PT,
+} from './config/worksheetLayoutRules';
 import { renderBatch } from './worksheetRenderer';
+import { keyRootOf, flatKeyQuestions } from './answerKeyCheck';
 import { mergeAndStamp } from './pdfMerge';
 import { drawQrCode } from './qrCode';
+import { drawSimpleSvg, parseSimpleSvg, ParsedSvg } from './svgPdf';
+import { readVariantSvg } from './svgAssetCatalog';
+import type { ResolvedQuestion } from './services/worksheetContent';
 import JSZip from 'jszip';
 
 // Resolve __dirname in ES Modules
@@ -18,6 +34,144 @@ if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 }
 
+const PAGE_WIDTH = 595.28;
+const PAGE_HEIGHT = 841.89;
+/** Distance from the top of the page to the first question line. */
+const FIRST_QUESTION_TOP_OFFSET = 220;
+
+export function wrapTextToWidth(
+  text: string,
+  font: PDFFont,
+  fontSize: number,
+  maxWidth: number
+): string[] {
+  if (!Number.isFinite(maxWidth) || maxWidth <= 0) {
+    throw new RangeError('maxWidth must be a positive number');
+  }
+
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let currentLine = '';
+
+  const splitWord = (word: string): string[] => {
+    const segments: string[] = [];
+    let segment = '';
+
+    for (const character of Array.from(word)) {
+      const candidate = `${segment}${character}`;
+      if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) {
+        segment = candidate;
+        continue;
+      }
+
+      if (!segment) {
+        throw new RangeError('maxWidth is narrower than a single character');
+      }
+
+      segments.push(segment);
+      segment = character;
+    }
+
+    if (segment) segments.push(segment);
+    return segments;
+  };
+
+  for (const word of words) {
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) {
+      currentLine = candidate;
+      continue;
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+      currentLine = '';
+    }
+
+    const wordSegments = splitWord(word);
+    lines.push(...wordSegments.slice(0, -1));
+    currentLine = wordSegments.at(-1) ?? '';
+  }
+
+  if (currentLine) lines.push(currentLine);
+  return lines;
+}
+
+/**
+ * Convert an answer (scalar, array, or object) to the string the
+ * Diagnostic Placement UI shows next to "Correct: ".
+ *
+ * Many question types have structured answers (matching pairs, cluster
+ * loops, dual-mark groups, fill-in-the-blank sequences). The naive
+ * `String(value)` returns "[object Object]" or "" for these, leaving
+ * the placement grader with no answer to compare against. This helper
+ * detects the known shapes and emits a compact, human-readable form
+ * (e.g. "Left: 5, Right: 2" for more/less groups), and falls back to
+ * JSON for anything unknown.
+ */
+function stringifyAnswer(value: any, item: any): string {
+  if (value === null || value === undefined) return '';
+  // Scalars (string, number, boolean) stringify directly.
+  if (typeof value !== 'object') return String(value).trim();
+
+  const detect = item?.icr?.detect;
+  const data = item?.data || {};
+
+  // Matching (class 3 shape): array of {lPos, rPos, shape?, obj?}
+  // Matching (class 2 line-draw): each item has data.lPos, data.rPos, data.matchesTo
+  if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'object' && ('lPos' in value[0] || 'l' in value[0])) {
+    return value.map((m: any) => `${m.lPos ?? m.l}→${m.rPos ?? m.r}`).join(', ');
+  }
+  // Single matching-pair item (class 2 section 8 / Match Shapes): per-item
+  // lPos/rPos. Format as "3→5 (Oval→Hand Mirror)" if matchesTo is also set.
+  if ('lPos' in value && 'rPos' in value) {
+    const pair = `${value.lPos}→${value.rPos}`;
+    const label = value.matchesTo ? ` (${value.shape ?? '?'}→${value.matchesTo})` : '';
+    return pair + label;
+  }
+  // group_circle (more/less): {cells: [{cell, task, lCount, rCount, ans}]}
+  if (data && Array.isArray(data.cells)) {
+    return data.cells.map((c: any) => `${c.cell}: ${c.ans} (${c.lCount} vs ${c.rCount})`).join('; ');
+  }
+  // fill-in-blank sequence: array of numbers/strings
+  if (Array.isArray(value)) {
+    return value.map((v: any) => (v && typeof v === 'object' && 'value' in v ? v.value : v)).join(', ');
+  }
+  // cluster_loop: {r1, r2, total, circle}
+  if ('circle' in value && ('r1' in value || 'r2' in value || 'total' in value)) {
+    return `circle ${value.circle} of ${value.total} (r1=${value.r1 ?? '?'}, r2=${value.r2 ?? '?'})`;
+  }
+  // dual_mark: {circle, tick, groups}
+  if ('circle' in value && 'tick' in value) {
+    return `circle ${value.circle}, tick ${value.tick}`;
+  }
+  // path_trace: {path} or string
+  if ('path' in value) {
+    return String(value.path);
+  }
+  // mcq with options: {ans, opts}
+  if ('ans' in value && 'opts' in value) {
+    return String(value.ans);
+  }
+  // matching_lCol_rCol (alt): {lCol, rCol, ...}
+  if ('lCol' in value && 'rCol' in value) {
+    return `match (${value.lCol} ↔ ${value.rCol})`;
+  }
+  // handwritten_digit_multi: {tens, ones} or {weeks, extraDays}
+  if ('tens' in value && 'ones' in value) {
+    return `${value.tens} tens + ${value.ones} ones`;
+  }
+  if ('weeks' in value && 'extraDays' in value) {
+    return `${value.weeks} weeks + ${value.extraDays} days`;
+  }
+  // Final fallback: JSON. Avoids the useless "[object Object]".
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '[unserializable]';
+  }
+}
+
 export interface PaperGenerationResult {
   fileName: string;
   filePath: string;
@@ -26,6 +180,28 @@ export interface PaperGenerationResult {
   questions: Question[];
   pdfFileName?: string;
   pdfFilePath?: string;
+  answerKeyData?: Array<{
+      setNum: number;
+      studentId: string;
+      studentName: string;
+      masterJson: any;
+      coords: any;
+      questionPaperJson: any;
+      questions?: any[];
+      answerKey?: any[];
+      /** One answer region per gradable question, keyed by the real question id. */
+      answerRegions?: Array<{
+        question_id: string;
+        anchor?: string;
+        dx_mm?: number;
+        dy_mm?: number;
+        page: number;
+        x_mm: number;
+        y_mm: number;
+        w_mm: number;
+        h_mm: number;
+      }>;
+    }>;
 }
 
 export interface WorksheetPdfResult {
@@ -35,8 +211,9 @@ export interface WorksheetPdfResult {
 }
 
 /**
- * Generate mock diagnostic question papers class-wise.
- * Stamps the student's name on their corresponding mock exam paper.
+ * Generate diagnostic question papers class-wise.
+ * Stamps the student's name on their corresponding exam paper.
+ * Answer keys are NOT included in the downloadable ZIP; they are returned for backend internal DB storage.
  */
 export async function generateDiagnosticPaper({
   classNumber,
@@ -54,10 +231,26 @@ export async function generateDiagnosticPaper({
   const classLevel = `CLASS_${classNumber}`;
   const results = await renderBatch(classLevel, students.length, onProgress, undefined, students);
 
-  // Extract questions from results[0].masterJson
+  // Extract questions from MongoDB Atlas if Class 2, or from masterJson
   let questions: Question[] = [];
-  if (results && results[0] && results[0].masterJson && results[0].masterJson.sections) {
-    const sections = results[0].masterJson.sections;
+  if (classNumber === 2 && students[0] && (students[0].studentId || (students[0] as any).id)) {
+    const sId = students[0].studentId || (students[0] as any).id;
+    questions = await dbStore.getStudentAssignedQuestions(sId, 2);
+  } else if (results && results[0] && keyRootOf(results[0].masterJson)) {
+    const root = keyRootOf(results[0].masterJson);
+    flatKeyQuestions(root).forEach(fq => {
+      questions.push({
+        question_id: fq.question_id,
+        question: fq.question,
+        answer: fq.answer,
+        answer_type: 'number',
+        topic: fq.topic,
+        subtopic: fq.topic,
+        difficulty: 'medium',
+        source_level: classNumber * 10
+      });
+    });
+    const sections: any[] = Array.isArray(root.sections) ? root.sections : [];
     sections.forEach((sec: any, secIdx: number) => {
       if (Array.isArray(sec.items)) {
         sec.items.forEach((item: any, itemIdx: number) => {
@@ -101,7 +294,7 @@ export async function generateDiagnosticPaper({
   const mergedFileName = `class${classNumber}_bulk_diagnostic.pdf`;
   zip.file(mergedFileName, mergedBuffer);
 
-  // Add a manifest.json
+  // Add a manifest.json (contains student list without answer key files)
   const manifestData = {
     classNumber,
     generatedAt: new Date().toISOString(),
@@ -110,12 +303,34 @@ export async function generateDiagnosticPaper({
       name: s.name,
       studentId: s.studentId || s.rollNo || `STUDENT_${idx + 1}`,
       setNum: idx + 1,
-      files: ['worksheet.pdf', 'answer_key.json', 'coords.json', 'question_paper.json']
+      files: ['worksheet.pdf']
     }))
   };
   zip.file('manifest.json', JSON.stringify(manifestData, null, 2));
 
-  // Loop through results and add student directories and flat PDFs
+  const answerKeyData: Array<{
+    setNum: number;
+    studentId: string;
+    studentName: string;
+    masterJson: any;
+    coords: any;
+    questionPaperJson: any;
+    questions?: Question[];
+    answerKey?: any;
+    answerRegions?: Array<{
+      question_id: string;
+      anchor?: string;
+      dx_mm?: number;
+      dy_mm?: number;
+      page: number;
+      x_mm: number;
+      y_mm: number;
+      w_mm: number;
+      h_mm: number;
+    }>;
+  }> = [];
+
+  // Loop through results and add student directories with ONLY student-facing worksheets
   results.forEach((r, idx) => {
     const student = students[idx];
     const sName = student.name;
@@ -124,30 +339,162 @@ export async function generateDiagnosticPaper({
     // Sanitize names for folder structure
     const folderName = `Set_${String(idx + 1).padStart(3, '0')}_RollNo-${sId.replace(/[^a-zA-Z0-9_\-]+/g, '')}_${sName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_\-]+/g, '')}`;
 
-    // Add individual student files
+    // Add individual student question paper PDF only (No answer_key.json, coords.json, or question_paper.json in ZIP)
     const pdfBuf = Buffer.from(r.pdfBase64, 'base64');
     zip.file(`${folderName}/worksheet.pdf`, pdfBuf);
 
-    if (r.masterJson) {
-      zip.file(`${folderName}/answer_key.json`, JSON.stringify(r.masterJson, null, 2));
-    }
-    if (r.coords) {
-      zip.file(`${folderName}/coords.json`, JSON.stringify(r.coords, null, 2));
-    }
-    if (r.questionPaperJson) {
-      zip.file(`${folderName}/question_paper.json`, JSON.stringify(r.questionPaperJson, null, 2));
+    // Extract exact questions for this student set from masterJson
+    const studentQuestions: Question[] = [];
+    const flatAnswerKey: Array<{ qid: string; question_id: string; answer: string; type: string; pos?: number }> = [];
+
+    /**
+     * One physical answer region per gradable question, keyed by the real
+     * question id.
+     *
+     * The template measures each answer element and keys it by a reference
+     * built from the same (section, item, blank) indices this loop uses to mint
+     * the id, so the two are joined on the numbering both sides already agree
+     * on rather than on a layout name that does not survive the section
+     * renumbering. A question whose answer has no single readable box — a
+     * matching line, a four-box ordering — is recorded as unmapped rather than
+     * pointed at a neighbouring region.
+     */
+    const regionsByRef: Record<string, any> = (r as any).questionRegions || {};
+    const answerRegions: Array<{
+      question_id: string;
+      anchor: string;
+      dx_mm: number;
+      dy_mm: number;
+      page: number;
+      x_mm: number;
+      y_mm: number;
+      w_mm: number;
+      h_mm: number;
+    }> = [];
+    const unmappedQuestions: string[] = [];
+    const addRegion = (questionId: string, ref: string) => {
+      const region = regionsByRef[ref];
+      if (!region) {
+        unmappedQuestions.push(questionId);
+        return;
+      }
+      answerRegions.push({
+        question_id: questionId,
+        // Anchored to the section heading, which the reader locates in the
+        // PDF's text layer; x/y are the flow-space fallback.
+        anchor: String(region.anchor ?? ''),
+        dx_mm: Number(region.dx_mm),
+        dy_mm: Number(region.dy_mm),
+        page: Number(region.page) || 1,
+        x_mm: Number(region.x_mm),
+        y_mm: Number(region.y_mm),
+        w_mm: Number(region.w_mm),
+        h_mm: Number(region.h_mm)
+      });
+    };
+
+    const keyRoot = keyRootOf(r.masterJson);
+    // Class 4 style key: one flat entry per answer field, keyed by its own id.
+    flatKeyQuestions(keyRoot).forEach(fq => {
+      studentQuestions.push({
+        question_id: fq.question_id,
+        question: fq.question,
+        answer: fq.answer,
+        answer_type: 'number',
+        topic: fq.topic,
+        subtopic: fq.topic,
+        difficulty: 'medium',
+        source_level: classNumber * 10
+      });
+      flatAnswerKey.push({ qid: fq.question_id, question_id: fq.question_id, answer: fq.answer, type: 'graded' });
+    });
+
+    if (keyRoot && Array.isArray(keyRoot.sections)) {
+      keyRoot.sections.forEach((sec: any, secIdx: number) => {
+        if (Array.isArray(sec.items)) {
+          sec.items.forEach((item: any, itemIdx: number) => {
+            // Resolve the answer from multiple possible locations:
+            //   1. icr.expected       — scalar/symbol/array/object answers (most sections)
+            //   2. data.answer        — alternate scalar
+            //   3. data.blanks[].value — fill-in-the-blank sections where the
+            //                            "answer" is a list of values per blank
+            //                            (e.g. missing-number sequences). The
+            //                            per-blank values are the correct fills.
+            let ans: string = '';
+            const icrExp = item.icr?.expected;
+            const dataAns = item.data?.answer;
+            const blanks: Array<{position: number; value: any}> = item.data?.blanks || [];
+            if (icrExp !== undefined && icrExp !== null) {
+              ans = stringifyAnswer(icrExp, item);
+            } else if (dataAns !== undefined && dataAns !== null) {
+              ans = stringifyAnswer(dataAns, item);
+            } else if (blanks.length > 0) {
+              // Synthesize an answer from the blank fills, sorted by
+              // position so it's stable across regenerations.
+              const sortedBlanks = [...blanks].sort((a, b) => (a.position || 0) - (b.position || 0));
+              ans = sortedBlanks.map((b) => String(b.value ?? '').trim()).join(', ');
+            }
+            const qid = `Q_L${classNumber * 10}_${secIdx + 1}_${itemIdx + 1}`;
+            const questionNum = item.question || itemIdx + 1;
+
+            if (blanks.length > 0) {
+              blanks.forEach((b, bi) => {
+                const v = String(b.value ?? '').trim();
+                const fid = `${qid}_b${bi + 1}`;
+                addRegion(fid, `s${secIdx}:i${itemIdx}:b${bi}`);
+                studentQuestions.push({
+                  question_id: fid,
+                  question: `${questionNum} (position ${b.position})`,
+                  answer: v,
+                  answer_type: 'number',
+                  topic: sec.section || `Section ${secIdx + 1}`,
+                  subtopic: sec.section || 'operations',
+                  difficulty: 'medium',
+                  source_level: classNumber * 10
+                });
+                flatAnswerKey.push({ qid: fid, question_id: fid, answer: v, type: 'fill_blank', pos: b.position });
+              });
+            } else {
+              addRegion(qid, `s${secIdx}:i${itemIdx}`);
+              studentQuestions.push({
+                question_id: qid,
+                question: questionNum,
+                answer: ans,
+                answer_type: 'number',
+                topic: sec.section || `Section ${secIdx + 1}`,
+                subtopic: sec.section || 'operations',
+                difficulty: 'medium',
+                source_level: classNumber * 10
+              });
+              flatAnswerKey.push({ qid, question_id: qid, answer: ans, type: 'graded' });
+            }
+          });
+        }
+      });
     }
 
-    // Add flat copies to all_worksheets/ for easy single-folder access
-    zip.file(`all_worksheets/${folderName}.pdf`, pdfBuf);
-    if (r.masterJson) {
-      zip.file(`all_worksheets/${folderName}_answer_key.json`, JSON.stringify(r.masterJson, null, 2));
-    }
-    if (r.coords) {
-      zip.file(`all_worksheets/${folderName}_coords.json`, JSON.stringify(r.coords, null, 2));
-    }
-    if (r.questionPaperJson) {
-      zip.file(`all_worksheets/${folderName}_question_paper.json`, JSON.stringify(r.questionPaperJson, null, 2));
+    // Collect answer keys internally for Mongo storage
+    answerKeyData.push({
+      setNum: idx + 1,
+      studentId: sId,
+      studentName: sName,
+      masterJson: r.masterJson,
+      coords: r.coords,
+      questionPaperJson: r.questionPaperJson,
+      questions: studentQuestions.length > 0 ? studentQuestions : questions,
+      answerKey: flatAnswerKey,
+      answerRegions
+    });
+
+    // Surfaced, not swallowed: a gradable question with no answer region cannot
+    // be read off a scan, and silently dropping it is how the region data
+    // drifted out of step with the question list in the first place.
+    if (unmappedQuestions.length > 0) {
+      console.warn(
+        `[answerRegions] set ${idx + 1} (${sName}): ${answerRegions.length} of ` +
+        `${answerRegions.length + unmappedQuestions.length} gradable questions have an answer region. ` +
+        `Unmapped: ${unmappedQuestions.join(', ')}`
+      );
     }
   });
 
@@ -155,21 +502,15 @@ export async function generateDiagnosticPaper({
   const pdfFilePath = path.join(OUTPUT_DIR, pdfFileName);
   fs.writeFileSync(pdfFilePath, mergedBuffer);
 
-  const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+  const zipBuffer = await zip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 }
+  });
 
   const fileName = `class${classNumber}_diagnostic_${randomUUID()}.zip`;
   const filePath = path.join(OUTPUT_DIR, fileName);
   fs.writeFileSync(filePath, zipBuffer);
-
-  // Write corresponding answer keys, coords, and question papers for each set to output/ for logs/verification
-  const baseName = fileName.replace(/\.zip$/, '');
-  const answerKeys = results.map(r => r.masterJson);
-  const coordsList = results.map(r => r.coords);
-  const questionPapers = results.map(r => r.questionPaperJson);
-
-  fs.writeFileSync(path.join(OUTPUT_DIR, `${baseName}_answer_key.json`), JSON.stringify(answerKeys, null, 2));
-  fs.writeFileSync(path.join(OUTPUT_DIR, `${baseName}_coords.json`), JSON.stringify(coordsList, null, 2));
-  fs.writeFileSync(path.join(OUTPUT_DIR, `${baseName}_question_paper.json`), JSON.stringify(questionPapers, null, 2));
 
   return {
     fileName,
@@ -181,7 +522,8 @@ export async function generateDiagnosticPaper({
       setNum: i + 1,
       studentName: s.name,
     })),
-    questions
+    questions,
+    answerKeyData
   };
 }
 
@@ -203,14 +545,8 @@ export async function generateLevelWorksheet({
   levelId: number;
   subIdx: number;
 }): Promise<LevelWorksheetResult> {
-  const puppeteer = await import('puppeteer');
-  const CHROME_EXECUTABLE_PATH = process.env.CHROME_EXECUTABLE_PATH || undefined;
-
-  const browser = await puppeteer.default.launch({
-    headless: true,
-    executablePath: CHROME_EXECUTABLE_PATH,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  const { launchBrowser } = await import('./browser');
+  const browser = await launchBrowser();
 
   try {
     const page = await browser.newPage();
@@ -223,8 +559,9 @@ export async function generateLevelWorksheet({
     await page.goto(`file://${htmlPath}`, { waitUntil: 'networkidle0' as any, timeout: 30000 });
 
     const data = await page.evaluate(({ levelId, subIdx, studentId, studentName }) => {
-      const nameInput = document.getElementById('studentName') as HTMLInputElement | null;
-      const idInput = document.getElementById('studentId') as HTMLInputElement | null;
+      const doc = (globalThis as any).document;
+      const nameInput = doc.getElementById('studentName');
+      const idInput = doc.getElementById('studentId');
       if (nameInput) nameInput.value = studentName;
       if (idInput) idInput.value = studentId;
       // @ts-ignore
@@ -235,7 +572,7 @@ export async function generateLevelWorksheet({
       meta = [];
       
       // Run generation a random number of times to yield different question selections and layouts
-      const iterations = Math.floor(Math.random() * 20) + 1;
+      const iterations = 1;
       for (let i = 0; i < iterations; i++) {
         // @ts-ignore
         generateOneSet(levelId, subIdx);
@@ -388,113 +725,152 @@ export async function renderWorksheetPdf({
   const font = await merged.embedFont(StandardFonts.Helvetica);
   const boldFont = await merged.embedFont(StandardFonts.HelveticaBold);
 
+  const defaultQuestionsPerPage = 7;
+  const defaultQuestionFontSize = 10.5;
+  const defaultAnswerBoxHeight = 24;
+
   for (let i = 0; i < studentsWithQuestions.length; i++) {
     const swq = studentsWithQuestions[i];
-    const page = merged.addPage([595.28, 841.89]);
-    const { width, height } = page.getSize();
-
-    page.drawRectangle({
-      x: 0,
-      y: height - 15,
-      width: width,
-      height: 15,
-      color: rgb(0.06, 0.48, 0.35), // Green theme for general worksheet
+    const usesBalvatikaLayout = isBalvatikaStage(swq.currentLevel);
+    const questionsPerPage = usesBalvatikaLayout ? QUESTIONS_PER_PAGE_MAX : defaultQuestionsPerPage;
+    const questionFontSize = usesBalvatikaLayout ? MIN_FONT_SIZE_PT : defaultQuestionFontSize;
+    const answerBoxHeight = usesBalvatikaLayout ? MIN_ANSWER_BOX_HEIGHT_PT : defaultAnswerBoxHeight;
+    const maxQuestionWidth = PAGE_WIDTH - 100;
+    const lineHeight = questionFontSize * 1.3;
+    // Wrap every question first so each block's height is known. The page
+    // count then flexes with the content (OVERFLOW_POLICY): a question that
+    // does not fit in the space left goes to the next page instead of
+    // running past the footer.
+    const blocks = swq.questions.map((q, index) => {
+      const lines = wrapTextToWidth(
+        `Q${index + 1}. [${q.topic}] ${q.question}`,
+        boldFont,
+        questionFontSize,
+        maxQuestionWidth
+      );
+      return { q, lines, height: lines.length * lineHeight + answerBoxHeight };
     });
-
-    page.drawText(`PERSONALIZED FLN MATHEMATICS WORKSHEET`, {
-      x: 50,
-      y: height - 60,
-      size: 15,
-      font: boldFont,
-      color: rgb(0.06, 0.48, 0.35),
+    const pagePlan = planQuestionPages(blocks.map(b => b.height), {
+      maxPerPage: questionsPerPage,
+      availableHeight: PAGE_HEIGHT - FIRST_QUESTION_TOP_OFFSET - PAGE_BOTTOM_MARGIN_PT,
+      gap: QUESTION_GAP_PT,
     });
+    const totalPages = Math.max(1, pagePlan.length);
 
-    page.drawText(`CLASS: ${className} - Section ${section} | CYCLE: ${cycle}`, {
-      x: 50,
-      y: height - 80,
-      size: 10,
-      font: boldFont,
-      color: rgb(0.4, 0.45, 0.5),
-    });
-
-    // Student Info Card
-    page.drawRectangle({
-      x: 50,
-      y: height - 150,
-      width: width - 100,
-      height: 50,
-      color: rgb(0.96, 0.98, 0.97),
-      borderColor: rgb(0.85, 0.9, 0.87),
-      borderWidth: 1,
-    });
-
-    page.drawText(`STUDENT: ${swq.name.toUpperCase()}`, {
-      x: 65,
-      y: height - 125,
-      size: 10,
-      font: boldFont,
-      color: rgb(0.05, 0.2, 0.15),
-    });
-
-    page.drawText(`FLN PLACEMENT: Level ${swq.currentLevel}.${swq.currentSubLevel}`, {
-      x: 65,
-      y: height - 140,
-      size: 8.5,
-      font: font,
-      color: rgb(0.4, 0.45, 0.5),
-    });
-
-    page.drawText(`DATE: ${new Date().toLocaleDateString()}`, {
-      x: width - 200,
-      y: height - 125,
-      size: 8.5,
-      font: font,
-      color: rgb(0.4, 0.45, 0.5),
-    });
-
-    drawQrCode(page, {
-      studentName: swq.name,
-      studentId: swq.studentId,
-      className,
-      section,
-      currentLevel: swq.currentLevel,
-      currentSubLevel: swq.currentSubLevel,
-      worksheetId,
-    }, width - 105, height - 150, 45);
-
-    // Draw student-specific personalized questions
-    let currentY = height - 220;
-    swq.questions.slice(0, 4).forEach((q, idx) => {
-      page.drawText(`Q${idx + 1}. [${q.topic}] ${q.question}`, {
-        x: 50,
-        y: currentY,
-        size: 10.5,
-        font: boldFont,
-        color: rgb(0.15, 0.15, 0.15),
-      });
+    for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+      const page = merged.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+      const { width, height } = page.getSize();
 
       page.drawRectangle({
+        x: 0,
+        y: height - 15,
+        width: width,
+        height: 15,
+        color: rgb(0.06, 0.48, 0.35), // Green theme for general worksheet
+      });
+
+      page.drawText(`PERSONALIZED FLN MATHEMATICS WORKSHEET`, {
         x: 50,
-        y: currentY - 45,
-        width: 150,
-        height: 24,
-        color: rgb(1, 1, 1),
-        borderColor: rgb(0.8, 0.8, 0.8),
+        y: height - 60,
+        size: 15,
+        font: boldFont,
+        color: rgb(0.06, 0.48, 0.35),
+      });
+
+      page.drawText(`CLASS: ${className} - Section ${section} | CYCLE: ${cycle}`, {
+        x: 50,
+        y: height - 80,
+        size: 10,
+        font: boldFont,
+        color: rgb(0.4, 0.45, 0.5),
+      });
+
+      // Student Info Card
+      page.drawRectangle({
+        x: 50,
+        y: height - 150,
+        width: width - 100,
+        height: 50,
+        color: rgb(0.96, 0.98, 0.97),
+        borderColor: rgb(0.85, 0.9, 0.87),
         borderWidth: 1,
       });
 
-      currentY -= 80;
-    });
+      page.drawText(`STUDENT: ${swq.name.toUpperCase()}`, {
+        x: 65,
+        y: height - 125,
+        size: 10,
+        font: boldFont,
+        color: rgb(0.05, 0.2, 0.15),
+      });
 
-    page.drawText(`Worksheet ID: ${worksheetId} · Page 1 of 1`, {
-      x: 50,
-      y: 40,
-      size: 7.5,
-      font: font,
-      color: rgb(0.6, 0.6, 0.6),
-    });
+      page.drawText(`FLN PLACEMENT: Level ${swq.currentLevel}.${swq.currentSubLevel}`, {
+        x: 65,
+        y: height - 140,
+        size: 8.5,
+        font: font,
+        color: rgb(0.4, 0.45, 0.5),
+      });
+
+      page.drawText(`DATE: ${new Date().toLocaleDateString()}`, {
+        x: width - 200,
+        y: height - 125,
+        size: 8.5,
+        font: font,
+        color: rgb(0.4, 0.45, 0.5),
+      });
+
+      drawQrCode(page, {
+        studentName: swq.name,
+        studentId: swq.studentId,
+        className,
+        section,
+        currentLevel: swq.currentLevel,
+        currentSubLevel: swq.currentSubLevel,
+        worksheetId,
+      }, width - 105, height - 150, 45);
+
+      // Draw student-specific personalized questions
+      let currentY = height - FIRST_QUESTION_TOP_OFFSET;
+      const pageBlocks = (pagePlan[pageIndex] ?? []).map(i => blocks[i]);
+
+      pageBlocks.forEach(block => {
+        const questionLines = block.lines;
+
+        questionLines.forEach((line, lineIndex) => {
+          page.drawText(line, {
+            x: 50,
+            y: currentY - lineIndex * lineHeight,
+            size: questionFontSize,
+            font: boldFont,
+            color: rgb(0.15, 0.15, 0.15),
+          });
+        });
+
+        const textBlockHeight = questionLines.length * lineHeight;
+        const answerBoxY = currentY - textBlockHeight - answerBoxHeight;
+        page.drawRectangle({
+          x: 50,
+          y: answerBoxY,
+          width: 150,
+          height: answerBoxHeight,
+          color: rgb(1, 1, 1),
+          borderColor: rgb(0.8, 0.8, 0.8),
+          borderWidth: 1,
+        });
+
+        currentY -= textBlockHeight + answerBoxHeight + QUESTION_GAP_PT;
+      });
+
+      page.drawText(`Worksheet ID: ${worksheetId} - Page ${pageIndex + 1} of ${totalPages}`, {
+        x: 50,
+        y: 40,
+        size: 7.5,
+        font: font,
+        color: rgb(0.6, 0.6, 0.6),
+      });
+    }
   }
-
   const mergedBuffer = Buffer.from(await merged.save());
   const fileName = `worksheet_${worksheetId}_${randomUUID()}.pdf`;
   const filePath = path.join(OUTPUT_DIR, fileName);
@@ -505,4 +881,202 @@ export async function renderWorksheetPdf({
     filePath,
     pdfUrl: `/output/${fileName}`
   };
+}
+
+// ---------------------------------------------------------------------------
+// Concept worksheets (#602)
+// ---------------------------------------------------------------------------
+
+export interface ConceptWorksheetLayout {
+  fontSizePt?: number;
+  answerBoxHeightPt?: number;
+  maxQuestionsPerPage?: number;
+}
+
+const CONCEPT_SHEET_FIRST_QUESTION_OFFSET = 165;
+const CONCEPT_SHEET_PICTURE_PT = 34;
+const CONCEPT_SHEET_PICTURE_GAP_PT = 6;
+const CONCEPT_SHEET_HEADING_PT = 26;
+
+/**
+ * A counting question's text shows its objects as asterisks ("Count the apples:
+ * * * *. How many..."). On the printed sheet the pictures stand in for them, so
+ * the asterisk run is replaced by a pointer to the pictures.
+ */
+export function pointToPictures(text: string): string {
+  return text.replace(/\s*:?\s*(?:\*\s*)+\./, ' (look at the pictures).');
+}
+
+/** Replace anything the standard PDF font cannot draw, so one odd character never stops the whole sheet. */
+function printableText(allowed: Set<number>, text: string): string {
+  let out = '';
+  for (const ch of text.normalize('NFC')) {
+    const cp = ch.codePointAt(0)!;
+    if (cp === 9 || cp === 10 || cp === 13) out += ' ';
+    else out += allowed.has(cp) ? ch : '?';
+  }
+  return out;
+}
+
+/**
+ * Print questions that were already resolved from templates (see
+ * `resolveWorksheetContent`), as a worksheet for a class.
+ *
+ * Takes finished content and touches no database, so it can be tested with
+ * made-up questions. Every question is printed: the page count follows the
+ * content and nothing is cut (see OVERFLOW_POLICY). The layout rules can ask
+ * for more than the Balvatika minimums but never for less.
+ */
+export async function renderConceptWorksheet({
+  worksheetId,
+  className,
+  section,
+  conceptIds,
+  resolvedQuestions,
+  layoutRules,
+}: {
+  worksheetId: string;
+  className: string;
+  section: string;
+  conceptIds: string[];
+  resolvedQuestions: ResolvedQuestion[];
+  layoutRules?: ConceptWorksheetLayout;
+}): Promise<WorksheetPdfResult> {
+  if (!Array.isArray(resolvedQuestions) || resolvedQuestions.length === 0) {
+    throw new RangeError('A concept worksheet needs at least one question.');
+  }
+  const fontSize = Math.max(layoutRules?.fontSizePt ?? MIN_FONT_SIZE_PT, MIN_FONT_SIZE_PT);
+  const perPage = Math.min(Math.max(1, Math.floor(layoutRules?.maxQuestionsPerPage ?? QUESTIONS_PER_PAGE_MAX)), QUESTIONS_PER_PAGE_MAX);
+  const lineHeight = fontSize * 1.3;
+  const maxWidth = PAGE_WIDTH - 100;
+
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const allowed = new Set(font.getCharacterSet());
+  const safe = (text: string) => printableText(allowed, text);
+
+  // Artwork is parsed once per file. A picture that cannot be drawn stops the
+  // sheet with a clear error rather than printing a question with no picture.
+  const artwork = new Map<string, ParsedSvg>();
+  const artFor = (q: ResolvedQuestion): ParsedSvg | undefined => {
+    if (!q.svgVariant) return undefined;
+    const cached = artwork.get(q.svgVariant.file);
+    if (cached) return cached;
+    const markup = readVariantSvg(q.svgVariant);
+    if (!markup) throw new Error(`Artwork file ${q.svgVariant.file} for ${q.questionId} cannot be read.`);
+    try {
+      const parsed = parseSimpleSvg(markup);
+      artwork.set(q.svgVariant.file, parsed);
+      return parsed;
+    } catch (err: any) {
+      throw new Error(`Artwork file ${q.svgVariant.file} for ${q.questionId} cannot be drawn: ${err.message}`);
+    }
+  };
+
+  let previousConcept: string | null = null;
+  const blocks = resolvedQuestions.map((q, index) => {
+    const art = q.svgCount && q.svgCount > 0 ? artFor(q) : undefined;
+    const rawText = art ? pointToPictures(q.question) : q.question;
+    const textLines = wrapTextToWidth(safe(`Q${index + 1}. ${rawText}`), bold, fontSize, maxWidth);
+    const choiceLines = (q.choices ?? []).flatMap((choice, i) =>
+      wrapTextToWidth(safe(`${String.fromCharCode(65 + i)}. ${choice}`), font, fontSize, maxWidth - 20));
+    // Pictures the child circles get room on every side (#590).
+    const pictureCell = CONCEPT_SHEET_PICTURE_PT + CONCEPT_SHEET_PICTURE_GAP_PT + (q.circleAnswer ? 2 * CIRCLE_PADDING_PT : 0);
+    const picturesPerRow = Math.max(1, Math.floor(maxWidth / pictureCell));
+    const pictureRows = art ? Math.ceil(q.svgCount! / picturesPerRow) : 0;
+    // How much answer space this answer type gets. A drawn box is never below
+    // the minimum, and a caller may ask for a taller one.
+    const rule = answerSpaceFor(q.answerType);
+    const answerHeight = rule.style === 'none'
+      ? rule.heightPt
+      : Math.max(rule.heightPt, MIN_ANSWER_BOX_HEIGHT_PT, layoutRules?.answerBoxHeightPt ?? 0);
+    const heading = q.conceptId !== previousConcept
+      ? safe(`${q.conceptId}${getLevelForConcept(q.conceptId)?.levelTitle ? ': ' + getLevelForConcept(q.conceptId)!.levelTitle : ''}`)
+      : undefined;
+    previousConcept = q.conceptId;
+    const height = (heading ? CONCEPT_SHEET_HEADING_PT : 0)
+      + textLines.length * lineHeight
+      + (choiceLines.length ? choiceLines.length * lineHeight + 4 : 0)
+      + pictureRows * pictureCell
+      + answerHeight;
+    return { q, art, textLines, choiceLines, pictureRows, pictureCell, picturesPerRow, rule, answerHeight, heading, height };
+  });
+
+  const plan = planQuestionPages(blocks.map(b => b.height), {
+    maxPerPage: perPage,
+    availableHeight: PAGE_HEIGHT - CONCEPT_SHEET_FIRST_QUESTION_OFFSET - PAGE_BOTTOM_MARGIN_PT,
+    gap: QUESTION_GAP_PT,
+  });
+  const totalPages = plan.length;
+  const today = new Date().toISOString().slice(0, 10);
+  const conceptList = safe([...new Set(conceptIds)].join(', '));
+
+  plan.forEach((indexes, pageIndex) => {
+    const page = doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    const { height } = page.getSize();
+    page.drawRectangle({ x: 0, y: height - 14, width: PAGE_WIDTH, height: 14, color: rgb(0.06, 0.5, 0.35) });
+    page.drawText('FLN CONCEPT WORKSHEET', { x: 50, y: height - 48, size: 16, font: bold, color: rgb(0.06, 0.5, 0.35) });
+    page.drawText(safe(`Class: ${className}  |  Section: ${section}  |  Date: ${today}`), { x: 50, y: height - 68, size: 10, font, color: rgb(0.3, 0.3, 0.3) });
+    page.drawText(safe(`Concepts: ${conceptList}`).slice(0, 110), { x: 50, y: height - 83, size: 9, font, color: rgb(0.45, 0.45, 0.45) });
+    page.drawText('Name: ______________________________', { x: 50, y: height - 112, size: 12, font, color: rgb(0.15, 0.15, 0.15) });
+
+    let y = height - CONCEPT_SHEET_FIRST_QUESTION_OFFSET;
+    for (const i of indexes) {
+      const b = blocks[i];
+      if (b.heading) {
+        page.drawText(b.heading, { x: 50, y: y - 12, size: 11, font: bold, color: rgb(0.06, 0.5, 0.35) });
+        y -= CONCEPT_SHEET_HEADING_PT;
+      }
+      b.textLines.forEach((line, k) => {
+        page.drawText(line, { x: 50, y: y - fontSize - k * lineHeight, size: fontSize, font: bold, color: rgb(0.15, 0.15, 0.15) });
+      });
+      y -= b.textLines.length * lineHeight;
+      if (b.choiceLines.length) {
+        b.choiceLines.forEach((line, k) => {
+          page.drawText(line, { x: 70, y: y - fontSize - k * lineHeight, size: fontSize, font, color: rgb(0.2, 0.2, 0.2) });
+        });
+        y -= b.choiceLines.length * lineHeight + 4;
+      }
+      if (b.art) {
+        for (let c = 0; c < b.q.svgCount!; c++) {
+          const row = Math.floor(c / b.picturesPerRow);
+          const col = c % b.picturesPerRow;
+          const pad = b.q.circleAnswer ? CIRCLE_PADDING_PT : 0;
+          drawSimpleSvg(
+            page, b.art,
+            50 + pad + col * b.pictureCell,
+            y - pad - row * b.pictureCell,
+            CONCEPT_SHEET_PICTURE_PT,
+          );
+        }
+        y -= b.pictureRows * b.pictureCell;
+      }
+      const grey = rgb(0.8, 0.8, 0.8);
+      if (b.rule.style === 'box') {
+        page.drawRectangle({
+          x: 50, y: y - b.answerHeight, width: b.rule.widthPt, height: b.answerHeight,
+          color: rgb(1, 1, 1), borderColor: grey, borderWidth: 1,
+          ...(b.rule.dashed ? { borderDashArray: [4, 3] } : {}),
+        });
+      } else if (b.rule.style === 'line') {
+        page.drawLine({ start: { x: 50, y: y - b.answerHeight + 6 }, end: { x: 50 + b.rule.widthPt, y: y - b.answerHeight + 6 }, thickness: 1, color: grey });
+      } else if (b.rule.style === 'true-false') {
+        ['True', 'False'].forEach((label, k) => {
+          const x = 50 + k * (b.rule.widthPt / 2);
+          page.drawRectangle({ x, y: y - b.answerHeight, width: b.rule.widthPt / 2 - 10, height: b.answerHeight, borderColor: grey, borderWidth: 1, color: rgb(1, 1, 1) });
+          page.drawText(label, { x: x + 8, y: y - b.answerHeight / 2 - 4, size: 11, font, color: rgb(0.45, 0.45, 0.45) });
+        });
+      }
+      y -= b.answerHeight + QUESTION_GAP_PT;
+    }
+    page.drawText(safe(`Worksheet ID: ${worksheetId} - Page ${pageIndex + 1} of ${totalPages}`), {
+      x: 50, y: 40, size: 7.5, font, color: rgb(0.6, 0.6, 0.6),
+    });
+  });
+
+  const fileName = `concept_worksheet_${worksheetId}_${randomUUID()}.pdf`;
+  const filePath = path.join(OUTPUT_DIR, fileName);
+  fs.writeFileSync(filePath, Buffer.from(await doc.save()));
+  return { fileName, filePath, pdfUrl: `/output/${fileName}` };
 }
