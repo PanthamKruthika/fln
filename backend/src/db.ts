@@ -4152,6 +4152,13 @@ export class DBStore {
       { id: 'u7_amit', email: 'vol.amit@fln.org', name: 'Amit Saini (Volunteer)', role: UserRole.VOLUNTEER, assignedSchools: ['gps-vl-002', 'gps-jai-004'] },
       { id: 'u7_sneha', email: 'vol.up_sneha@fln.org', name: 'Sneha Verma (Volunteer)', role: UserRole.VOLUNTEER, assignedSchools: ['gps-lko-005'] },
       { id: 'u7_vipin', email: 'vol.hr_vipin@fln.org', name: 'Haryana Volunteer (Vipin)', role: UserRole.VOLUNTEER, assignedSchools: ['gps-amb-003'] },
+      // Demo UI role panel accounts
+      { id: 'u4_demo_ldh', email: 'block.ldh_01@fln.org', name: 'Ludhiana Block Admin 1', role: UserRole.BLOCK_ADMIN, stateCode: 'PB', districtCode: 'LDH', blockCode: 'LDH-01' },
+      { id: 'u5_demo_pb', email: 'school.pb_ldh_ldh_01_01@fln.org', name: 'Punjab Demo Principal', role: UserRole.SCHOOL, schoolId: 'gps-mt-001' },
+      { id: 'u6_demo_hr1', email: 'teacher.hr_amb_amb_01_01.c2@fln.org', name: 'Haryana Demo Teacher', role: UserRole.TEACHER, schoolId: 'gps-amb-003' },
+      { id: 'u6_demo_hr3', email: 'teacher.hr_amb_amb_01_03.c2@fln.org', name: 'Haryana Demo Teacher', role: UserRole.TEACHER, schoolId: 'gps-amb-003' },
+      { id: 'u7_demo_pb', email: 'vol.pb_ldh_ldh_01_03@fln.org', name: 'Punjab Demo Volunteer', role: UserRole.VOLUNTEER, assignedSchools: ['gps-vl-002'] },
+      { id: 'u7_demo_hr', email: 'vol.hr_amb_amb_01_03@fln.org', name: 'Haryana Demo Volunteer', role: UserRole.VOLUNTEER, assignedSchools: ['gps-amb-003'] },
       // District admins for new districts
       { id: 'u3_bth', email: 'district.bth@fln.org', name: 'Bathinda District Officer', role: UserRole.DISTRICT_ADMIN, stateCode: 'PB', districtCode: 'BTH' },
       { id: 'u3_asr', email: 'district.asr@fln.org', name: 'Amritsar District Officer', role: UserRole.DISTRICT_ADMIN, stateCode: 'PB', districtCode: 'ASR' },
