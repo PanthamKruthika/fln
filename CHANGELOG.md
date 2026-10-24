@@ -4,6 +4,26 @@ All notable changes to this repository, grouped by date (newest first).
 Auto-curated from git history: pull-request merges and direct commits are listed;
 routine branch-sync merges are omitted. Regenerate with `gen_changelog.py`.
 
+## 2026-10-23 — CI test suites, PR bot checks, research restructuring & vault test fixes
+
+Everything merged between 2026-10-13 and 2026-10-23.
+
+**CI, Linting & Bot Automation**
+- **`ci`: split PR checks into granular jobs (#871)** — PR checks now report as individual jobs for visibility into specific test step failures.
+- **`ci`: PR checks bot and lockfile notifications (#868, #869, #870)** — added bot comments reporting detailed failures directly on PRs, notices on lockfile changes, ESLint validation, level-count checks, and all-routes verification.
+
+**Backend, Security & Database Resilience**
+- **`test(vault)`: resolve UUID false positives in vault tests (#872)** — fixed flaky vault test assertion identifying random trailing-digit UUIDs as Aadhaar numbers.
+- **`fix(backend)`: file-store fallback for question bank & curriculum methods (#831, closes #690)** — added file-based store support for 10 missing questionBank and curriculum methods when running without MongoDB.
+- **`fix`: skip duplicate question templates during bulk import (#825, closes #688)** — deduplicated template ingestion by ignoring duplicate question templates.
+- **`fix(evaluation)`: restrict OCR API key configuration to superadmin (#793, closes #742)**.
+- **`fix`: enforce principal analytics scoping (#660, closes #448)** — scoped general analytics endpoints to `user.schoolId` when accessed by principals.
+- **`test(backend)`: automated integration test suite for school onboarding (#854, closes #698)**.
+
+**Curriculum Research & Contributor Onboarding**
+- **`docs`: restructure Research/ directory by curriculum era (#867)** — organized research documents by curriculum era and documented the 109 foundational levels.
+- **Onboarding documents merged:** #864 (@ekjot9105-commits), #862 (@Mahak023), #842 (@sampurna222), #833 (@kzr-06), #663 (@hemanjaniharika).
+
 ## 2026-10-12 — Balvatika pipeline, pilot-safety fixes and contributor onboarding
 
 Everything merged between 2026-10-04 and 2026-10-12.
