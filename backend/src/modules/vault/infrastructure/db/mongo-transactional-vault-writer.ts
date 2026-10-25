@@ -83,15 +83,29 @@ export class MongoTransactionalVaultWriter implements TransactionalVaultWriter {
         });
       } catch (err) {
         if (isReplicaSetRequiredError(err)) {
-          throw new VaultError(
-            'VAULT_DB_REQUIRES_REPLICA_SET',
-            'The vault requires a MongoDB replica set (or sharded cluster) for atomic ' +
-              'multi-document writes. A standalone `mongod` cannot service transactions. ' +
-              'See MIGRATION_PLAN.md Phase 2 / Phase 7 deployment notes.',
-            503,
-          );
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn('[vault] Non-replica-set standalone Mongo detected in dev: falling back to non-transactional writes.');
+            const fallbackConn: VaultWriteConnection = {
+              insertIdentity: (rec) =>
+                new MongoIdentityRepository(this.db).insert(rec).then(() => undefined),
+              insertToken: (token) =>
+                new MongoTokenRepository(this.db).insert(token),
+              writeLog: (entry) =>
+                this.db.collection('logbook').insertOne(entry).then(() => undefined),
+            };
+            result = await work(fallbackConn);
+          } else {
+            throw new VaultError(
+              'VAULT_DB_REQUIRES_REPLICA_SET',
+              'The vault requires a MongoDB replica set (or sharded cluster) for atomic ' +
+                'multi-document writes. A standalone `mongod` cannot service transactions. ' +
+                'See MIGRATION_PLAN.md Phase 2 / Phase 7 deployment notes.',
+              503,
+            );
+          }
+        } else {
+          throw err;
         }
-        throw err;
       }
     } finally {
       await session.endSession().catch(() => undefined);
